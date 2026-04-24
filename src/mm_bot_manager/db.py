@@ -1,0 +1,116 @@
+import os
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any, Literal
+
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS bot (
+    bot_user_id    TEXT PRIMARY KEY,
+    username       TEXT NOT NULL,
+    display_name   TEXT,
+    description    TEXT,
+    owner_user_id  TEXT NOT NULL,
+    owner_username TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    deleted_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_bot_owner    ON bot(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_bot_username ON bot(username);
+
+CREATE TABLE IF NOT EXISTS token (
+    token_id    TEXT PRIMARY KEY,
+    bot_user_id TEXT NOT NULL REFERENCES bot(bot_user_id),
+    description TEXT,
+    created_at  TEXT NOT NULL,
+    revoked_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_token_bot ON token(bot_user_id);
+
+CREATE TABLE IF NOT EXISTS pending_bot_request (
+    request_id          TEXT PRIMARY KEY,
+    username            TEXT NOT NULL,
+    display_name        TEXT,
+    description         TEXT,
+    requester_user_id   TEXT NOT NULL,
+    requester_username  TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending',
+    resolved_at         TEXT,
+    resolved_by         TEXT,
+    deny_reason         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_req_status ON pending_bot_request(status);
+"""
+
+_SCHEMA_STMTS = [s.strip() for s in SCHEMA_SQL.split(";") if s.strip()]
+
+
+class DbConn:
+    """Unified connection adapter for SQLite and PostgreSQL.
+
+    Translates ``?`` parameter placeholders to ``%s`` for PostgreSQL so
+    repositories can use a single SQL style.
+    """
+
+    def __init__(self, inner: Any, *, dialect: Literal["sqlite", "postgres"]) -> None:
+        self._inner = inner
+        self.dialect: Literal["sqlite", "postgres"] = dialect
+
+    def _sql(self, sql: str) -> str:
+        if self.dialect == "postgres":
+            return sql.replace("?", "%s")
+        return sql
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        return self._inner.execute(self._sql(sql), params)
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+def connect(db_path: str) -> DbConn:
+    if db_path != ":memory:":
+        parent = os.path.dirname(db_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+    raw = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
+    raw.row_factory = sqlite3.Row
+    raw.execute("PRAGMA foreign_keys = ON")
+    raw.execute("PRAGMA journal_mode = WAL")
+    return DbConn(raw, dialect="sqlite")
+
+
+def connect_postgres(dsn: str) -> DbConn:
+    """Connect to PostgreSQL 15+. Requires the ``psycopg`` package."""
+    import psycopg  # type: ignore[import-not-found]
+    from psycopg.rows import dict_row  # type: ignore[import-not-found]
+
+    raw = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
+    return DbConn(raw, dialect="postgres")
+
+
+def init_schema(conn: DbConn) -> None:
+    if conn.dialect == "sqlite":
+        conn._inner.executescript(SCHEMA_SQL)
+    else:
+        conn.execute("BEGIN")
+        try:
+            for stmt in _SCHEMA_STMTS:
+                conn.execute(stmt)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+@contextmanager
+def transaction(conn: DbConn) -> Iterator[DbConn]:
+    conn.execute("BEGIN")
+    try:
+        yield conn
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    else:
+        conn.execute("COMMIT")

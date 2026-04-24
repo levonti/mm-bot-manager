@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.egg
+MANIFEST
+build/
+dist/
+
+# uv / venv
+.venv/
+.python-version
+
+# Testing & analysis
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pyre/
+.pytype/
+
+# Environment / secrets
+.env
+
+# Runtime data (SQLite volume mounted here locally)
+data/
+
+# JetBrains IDE
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/usage.statistics.xml
+.idea/**/dictionaries
+.idea/**/shelf
+.idea/**/dataSources/
+.idea/**/dataSources.ids
+.idea/**/dataSources.local.xml
+.idea/**/dynamic.xml
+.idea/**/httpRequests
+.idea/sonarlint/
+*.iws
+*.iml
+.idea_modules/
+out/
+
+# macOS
+.DS_Store

@@ -1,0 +1,298 @@
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
+from .db import DbConn
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+@dataclass(frozen=True, slots=True)
+class BotRecord:
+    bot_user_id: str
+    username: str
+    display_name: str | None
+    description: str | None
+    owner_user_id: str
+    owner_username: str
+    created_at: str
+    deleted_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TokenRecord:
+    token_id: str
+    bot_user_id: str
+    description: str | None
+    created_at: str
+    revoked_at: str | None
+
+
+def _bot_from_row(row: Any) -> BotRecord:
+    return BotRecord(
+        bot_user_id=row["bot_user_id"],
+        username=row["username"],
+        display_name=row["display_name"],
+        description=row["description"],
+        owner_user_id=row["owner_user_id"],
+        owner_username=row["owner_username"],
+        created_at=row["created_at"],
+        deleted_at=row["deleted_at"],
+    )
+
+
+def _token_from_row(row: Any) -> TokenRecord:
+    return TokenRecord(
+        token_id=row["token_id"],
+        bot_user_id=row["bot_user_id"],
+        description=row["description"],
+        created_at=row["created_at"],
+        revoked_at=row["revoked_at"],
+    )
+
+
+class BotRepo:
+    def __init__(self, conn: DbConn) -> None:
+        self._conn = conn
+
+    def insert(
+        self,
+        *,
+        bot_user_id: str,
+        username: str,
+        display_name: str | None,
+        description: str | None,
+        owner_user_id: str,
+        owner_username: str,
+    ) -> BotRecord:
+        created_at = _now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO bot (bot_user_id, username, display_name, description,
+                             owner_user_id, owner_username, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                bot_user_id,
+                username,
+                display_name,
+                description,
+                owner_user_id,
+                owner_username,
+                created_at,
+            ),
+        )
+        return BotRecord(
+            bot_user_id=bot_user_id,
+            username=username,
+            display_name=display_name,
+            description=description,
+            owner_user_id=owner_user_id,
+            owner_username=owner_username,
+            created_at=created_at,
+            deleted_at=None,
+        )
+
+    def get_by_owner_and_username(self, owner_user_id: str, username: str) -> BotRecord | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM bot
+            WHERE owner_user_id = ? AND username = ? AND deleted_at IS NULL
+            """,
+            (owner_user_id, username),
+        ).fetchone()
+        return _bot_from_row(row) if row else None
+
+    def list_by_owner(self, owner_user_id: str) -> list[BotRecord]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM bot
+            WHERE owner_user_id = ? AND deleted_at IS NULL
+            ORDER BY created_at ASC
+            """,
+            (owner_user_id,),
+        ).fetchall()
+        return [_bot_from_row(r) for r in rows]
+
+    def patch(
+        self,
+        bot_user_id: str,
+        *,
+        username: str | None = None,
+        display_name: str | None = None,
+        description: str | None = None,
+    ) -> None:
+        sets: list[str] = []
+        args: list[str] = []
+        if username is not None:
+            sets.append("username = ?")
+            args.append(username)
+        if display_name is not None:
+            sets.append("display_name = ?")
+            args.append(display_name)
+        if description is not None:
+            sets.append("description = ?")
+            args.append(description)
+        if not sets:
+            return
+        args.append(bot_user_id)
+        self._conn.execute(
+            f"UPDATE bot SET {', '.join(sets)} WHERE bot_user_id = ?",
+            args,
+        )
+
+    def mark_deleted(self, bot_user_id: str) -> None:
+        self._conn.execute(
+            "UPDATE bot SET deleted_at = ? WHERE bot_user_id = ?",
+            (_now_iso(), bot_user_id),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PendingRequestRecord:
+    request_id: str
+    username: str
+    display_name: str | None
+    description: str | None
+    requester_user_id: str
+    requester_username: str
+    created_at: str
+    status: str  # pending | approved | denied
+    resolved_at: str | None
+    resolved_by: str | None
+    deny_reason: str | None
+
+
+def _pending_from_row(row: Any) -> PendingRequestRecord:
+    return PendingRequestRecord(
+        request_id=row["request_id"],
+        username=row["username"],
+        display_name=row["display_name"],
+        description=row["description"],
+        requester_user_id=row["requester_user_id"],
+        requester_username=row["requester_username"],
+        created_at=row["created_at"],
+        status=row["status"],
+        resolved_at=row["resolved_at"],
+        resolved_by=row["resolved_by"],
+        deny_reason=row["deny_reason"],
+    )
+
+
+class PendingRequestRepo:
+    def __init__(self, conn: DbConn) -> None:
+        self._conn = conn
+
+    def create(
+        self,
+        *,
+        request_id: str,
+        username: str,
+        display_name: str | None,
+        description: str | None,
+        requester_user_id: str,
+        requester_username: str,
+    ) -> PendingRequestRecord:
+        created_at = _now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO pending_bot_request
+                (request_id, username, display_name, description,
+                 requester_user_id, requester_username, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                request_id,
+                username,
+                display_name,
+                description,
+                requester_user_id,
+                requester_username,
+                created_at,
+            ),
+        )
+        return PendingRequestRecord(
+            request_id=request_id,
+            username=username,
+            display_name=display_name,
+            description=description,
+            requester_user_id=requester_user_id,
+            requester_username=requester_username,
+            created_at=created_at,
+            status="pending",
+            resolved_at=None,
+            resolved_by=None,
+            deny_reason=None,
+        )
+
+    def get(self, request_id: str) -> PendingRequestRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM pending_bot_request WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+        return _pending_from_row(row) if row else None
+
+    def resolve(
+        self,
+        request_id: str,
+        *,
+        status: str,
+        resolved_by: str,
+        deny_reason: str | None = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            UPDATE pending_bot_request
+               SET status = ?, resolved_at = ?, resolved_by = ?, deny_reason = ?
+             WHERE request_id = ?
+            """,
+            (status, _now_iso(), resolved_by, deny_reason, request_id),
+        )
+
+
+class TokenRepo:
+    def __init__(self, conn: DbConn) -> None:
+        self._conn = conn
+
+    def record(self, *, token_id: str, bot_user_id: str, description: str | None) -> TokenRecord:
+        created_at = _now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO token (token_id, bot_user_id, description, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (token_id, bot_user_id, description, created_at),
+        )
+        return TokenRecord(
+            token_id=token_id,
+            bot_user_id=bot_user_id,
+            description=description,
+            created_at=created_at,
+            revoked_at=None,
+        )
+
+    def list_active_for_bot(self, bot_user_id: str) -> list[TokenRecord]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM token
+            WHERE bot_user_id = ? AND revoked_at IS NULL
+            ORDER BY created_at ASC
+            """,
+            (bot_user_id,),
+        ).fetchall()
+        return [_token_from_row(r) for r in rows]
+
+    def get(self, token_id: str) -> TokenRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM token WHERE token_id = ?",
+            (token_id,),
+        ).fetchone()
+        return _token_from_row(row) if row else None
+
+    def mark_revoked(self, token_id: str) -> None:
+        self._conn.execute(
+            "UPDATE token SET revoked_at = ? WHERE token_id = ?",
+            (_now_iso(), token_id),
+        )

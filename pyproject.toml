@@ -1,0 +1,52 @@
+[project]
+name = "mm-bot-manager"
+version = "0.1.0"
+description = "Mattermost bot that lets users manage their own bot accounts via chat."
+authors = [
+    { name = "levonti", email = "leo@badbox.net" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "httpx>=0.28.1",
+    "pydantic>=2.13.3",
+    "pydantic-settings>=2.14.0",
+    "structlog>=25.5.0",
+    "websockets>=16.0",
+]
+
+[project.scripts]
+mm-bot-manager = "mm_bot_manager.__main__:run"
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.1"]
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.20.2",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
+    "respx>=0.23.1",
+    "ruff>=0.15.12",
+    "testcontainers[postgres]>=4.14.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["src"]
