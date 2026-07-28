@@ -1,9 +1,11 @@
 import asyncio
 import contextlib
+import signal
 
 from .config import Settings, load_settings
 from .db import DbConn, connect, connect_postgres, init_schema
 from .dispatcher import CommandContextFactory, MessageRouter, handle_event
+from .health import start_health_server
 from .logging import configure_logging, get_logger
 from .mm_client import MattermostClient, MattermostError
 from .repository import BotRepo, PendingRequestRepo, TokenRepo
@@ -47,52 +49,80 @@ async def main_async() -> None:
     log = get_logger("mm_bot_manager")
 
     conn = _connect_database(settings)
-    init_schema(conn)
-    bot_repo = BotRepo(conn)
-    token_repo = TokenRepo(conn)
-    pending_repo = PendingRequestRepo(conn)
-
     background: set[asyncio.Task[None]] = set()
+    loop = asyncio.get_running_loop()
+    main_task = asyncio.current_task()
+    sigterm_handler_installed = False
+    if main_task is not None:
+        try:
+            loop.add_signal_handler(signal.SIGTERM, main_task.cancel)
+            sigterm_handler_installed = True
+        except NotImplementedError:
+            pass
 
-    kw = {"verify_ssl": settings.mm_verify_ssl}
-    async with (
-        MattermostClient(settings.mm_rest_base, settings.mm_bot_token, **kw) as bot_mm,
-        MattermostClient(settings.mm_rest_base, settings.mm_token, **kw) as admin_mm,
-    ):
-        me = await bot_mm.get_me()
-        manager_user_id = me["id"]
-        manager_username = me["username"]
-        log.info("logged_in", user_id=manager_user_id, username=manager_username)
+    try:
+        init_schema(conn)
+        bot_repo = BotRepo(conn)
+        token_repo = TokenRepo(conn)
+        pending_repo = PendingRequestRepo(conn)
 
-        approver_ids = await _resolve_approvers(
-            admin_mm, settings.approver_usernames, log
-        )
-        if approver_ids:
-            log.info("approval_required", approver_count=len(approver_ids))
-        else:
-            log.info("approval_disabled")
-
-        router = MessageRouter(manager_user_id, manager_username)
-        factory = CommandContextFactory(
-            bot_repo=bot_repo,
-            token_repo=token_repo,
-            pending_repo=pending_repo,
-            admin_mm=admin_mm,
-            bot_mm=bot_mm,
-            manager_user_id=manager_user_id,
-            approver_ids=approver_ids,
-        )
-
-        async for event in stream_events(
-            settings.mm_ws_url, settings.mm_bot_token, verify_ssl=settings.mm_verify_ssl
+        kw = {"verify_ssl": settings.mm_verify_ssl}
+        async with (
+            MattermostClient(settings.mm_rest_base, settings.mm_bot_token, **kw) as bot_mm,
+            MattermostClient(settings.mm_rest_base, settings.mm_token, **kw) as admin_mm,
         ):
-            task = asyncio.create_task(handle_event(event, router, factory))
-            background.add(task)
-            task.add_done_callback(background.discard)
+            me = await bot_mm.get_me()
+            manager_user_id = me["id"]
+            manager_username = me["username"]
+            log.info("logged_in", user_id=manager_user_id, username=manager_username)
+
+            approver_ids = await _resolve_approvers(
+                admin_mm, settings.approver_usernames, log
+            )
+            if approver_ids:
+                log.info("approval_required", approver_count=len(approver_ids))
+            else:
+                log.info("approval_disabled")
+
+            router = MessageRouter(manager_user_id, manager_username)
+            factory = CommandContextFactory(
+                bot_repo=bot_repo,
+                token_repo=token_repo,
+                pending_repo=pending_repo,
+                admin_mm=admin_mm,
+                bot_mm=bot_mm,
+                manager_user_id=manager_user_id,
+                approver_ids=approver_ids,
+            )
+
+            health_server = await start_health_server(
+                conn, settings.health_host, settings.health_port
+            )
+            log.info(
+                "health_server_started",
+                host=settings.health_host,
+                port=settings.health_port,
+            )
+            async with health_server:
+                async for event in stream_events(
+                    settings.mm_ws_url,
+                    settings.mm_bot_token,
+                    verify_ssl=settings.mm_verify_ssl,
+                ):
+                    task = asyncio.create_task(handle_event(event, router, factory))
+                    background.add(task)
+                    task.add_done_callback(background.discard)
+    finally:
+        for task in background:
+            task.cancel()
+        await asyncio.gather(*background, return_exceptions=True)
+        conn.close()
+        if sigterm_handler_installed:
+            loop.remove_signal_handler(signal.SIGTERM)
 
 
 def run() -> None:
-    with contextlib.suppress(KeyboardInterrupt):
+    with contextlib.suppress(KeyboardInterrupt, asyncio.CancelledError):
         asyncio.run(main_async())
 
 

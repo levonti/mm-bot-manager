@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     db_name: str | None = Field(default=None)
     db_user: str | None = Field(default=None)
     db_password: str | None = Field(default=None)
+    health_host: str = Field(default="127.0.0.1")
+    health_port: int = Field(default=8080, ge=1, le=65535)
     log_level: str = Field(default="INFO")
     mm_verify_ssl: bool = Field(default=True)
     # Comma-separated Mattermost usernames of users who can approve bot creation.

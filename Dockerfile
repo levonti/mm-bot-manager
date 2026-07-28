@@ -22,7 +22,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+
+EXPOSE 8080
 
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv

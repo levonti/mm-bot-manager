@@ -65,6 +65,13 @@ class DbConn:
     def execute(self, sql: str, params: Any = ()) -> Any:
         return self._inner.execute(self._sql(sql), params)
 
+    def ping(self) -> bool:
+        try:
+            row = self.execute("SELECT 1").fetchone()
+        except Exception:
+            return False
+        return row is not None
+
     def close(self) -> None:
         self._inner.close()
 
