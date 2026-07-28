@@ -159,6 +159,45 @@ kubectl -n mm-bot-manager create secret docker-registry harbor-pull \
 unset HARBOR_PASSWORD
 ```
 
+### Rotate the Harbor pull Secret
+
+Update the pull Secret in place; do not delete it first, because that creates a
+window in which newly scheduled Pods cannot authenticate to Harbor. Run the
+following in Bash, substituting the namespace, release, Secret name, and Harbor
+host for the installed profile. The new password is read at a hidden prompt and
+is not placed in the command line or shell history.
+
+```bash
+set -euo pipefail
+namespace="mm-bot-manager"
+release="mm-bot-manager"
+pull_secret="harbor-pull"
+harbor_server="harbor.internal.example"
+
+read -r -p "Harbor username: " HARBOR_USERNAME
+read -r -s -p "Harbor password: " HARBOR_PASSWORD
+printf '\n'
+kubectl -n "$namespace" create secret docker-registry "$pull_secret" \
+  --docker-server="$harbor_server" \
+  --docker-username="$HARBOR_USERNAME" \
+  --docker-password="$HARBOR_PASSWORD" \
+  --dry-run=client -o yaml | kubectl -n "$namespace" apply -f -
+unset HARBOR_USERNAME HARBOR_PASSWORD
+
+kubectl -n "$namespace" get secret "$pull_secret" \
+  -o jsonpath='{.type}{"\n"}' | grep -Fx 'kubernetes.io/dockerconfigjson'
+kubectl -n "$namespace" rollout restart deployment \
+  -l "app.kubernetes.io/instance=$release"
+kubectl -n "$namespace" rollout status deployment \
+  -l "app.kubernetes.io/instance=$release" --timeout=10m
+```
+
+This verifies the refreshed credentials by recreating the application Pod. New
+backup and restore Pods use the updated Secret automatically. Restart the
+PostgreSQL StatefulSet only during a planned maintenance window if it must also
+perform a fresh pull immediately; an existing running container does not need a
+registry credential refresh.
+
 `imagePullSecrets` authenticates image pulls; it does not make a private Harbor
 CA trusted. Install the Harbor CA in containerd, CRI-O, or Docker configuration
 on **every cluster node** and restart/reload that runtime as required by the
@@ -270,32 +309,100 @@ kubectl -n mm-bot-manager delete pod backup-inspector
 ```
 
 To restore, first list archives with the preceding temporary Pod and choose an
-existing safe basename. Stop the application so it cannot write during restore,
-render only the opt-in restore Job, wait for it, inspect its logs, delete it, and
-only then return the Deployment to one replica. The chart rejects restore names
-outside the safe `.dump` basename format.
+existing safe basename. A restore is destructive: suspend the backup CronJob and
+wait until every active backup Job has completed before scaling the application
+down. The following Bash procedure keeps its release, namespace, chart, and
+values profile in quoted variables. Its cleanup handler resumes the CronJob if
+this procedure suspended it, even when a later command fails or is interrupted.
+It leaves a CronJob that was already suspended in that state.
+
+Run it from a source checkout after setting `values_file` to the exact internal
+profile used by the release. The chart labels backup Jobs specifically so the
+wait loop includes scheduled and manually created backup Jobs.
 
 ```bash
-kubectl -n mm-bot-manager scale deployment/mm-bot-manager --replicas=0
-kubectl -n mm-bot-manager rollout status deployment/mm-bot-manager
+set -euo pipefail
+namespace="mm-bot-manager"
+release="mm-bot-manager"
+chart="deploy/helm/mm-bot-manager"
+values_file="$chart/examples/values-internal-longhorn.yaml"
+restore_file="mm-bot-manager-20260728T020000Z.dump"
+restore_manifest=""
+resume_backup=false
 
-helm template mm-bot-manager deploy/helm/mm-bot-manager \
-  --namespace mm-bot-manager \
+deployment="$(kubectl -n "$namespace" get deployment \
+  -l "app.kubernetes.io/instance=$release" \
+  -o jsonpath='{.items[0].metadata.name}')"
+backup_cronjob="$(kubectl -n "$namespace" get cronjob \
+  -l "app.kubernetes.io/instance=$release,app.kubernetes.io/component=backup" \
+  -o jsonpath='{.items[0].metadata.name}')"
+test -n "$deployment"
+test -n "$backup_cronjob"
+
+cleanup() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  test -z "$restore_manifest" || rm -f "$restore_manifest"
+  if "$resume_backup"; then
+    if ! kubectl -n "$namespace" patch cronjob "$backup_cronjob" \
+      --type=merge -p '{"spec":{"suspend":false}}'; then
+      printf '%s\n' "ERROR: could not resume backup CronJob $backup_cronjob" >&2
+      status=1
+    fi
+  fi
+  exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+
+backup_was_suspended="$(kubectl -n "$namespace" get cronjob "$backup_cronjob" \
+  -o jsonpath='{.spec.suspend}')"
+case "$backup_was_suspended" in
+  true) ;;
+  false|'')
+    kubectl -n "$namespace" patch cronjob "$backup_cronjob" \
+      --type=merge -p '{"spec":{"suspend":true}}'
+    resume_backup=true
+    ;;
+  *)
+    printf '%s\n' "Unexpected CronJob suspend value: $backup_was_suspended" >&2
+    exit 1
+    ;;
+esac
+
+active_backup_jobs() {
+  kubectl -n "$namespace" get jobs \
+    -l "app.kubernetes.io/instance=$release,app.kubernetes.io/component=backup" \
+    -o go-template='{{range .items}}{{if .status.active}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}'
+}
+while true; do
+  active_jobs="$(active_backup_jobs)"
+  test -z "$active_jobs" && break
+  printf '%s\n%s\n' \
+    "Waiting for active backup Jobs before restore:" "$active_jobs"
+  sleep 5
+done
+
+kubectl -n "$namespace" scale "deployment/$deployment" --replicas=0
+kubectl -n "$namespace" rollout status "deployment/$deployment" --timeout=10m
+
+restore_manifest="$(mktemp)"
+helm template "$release" "$chart" \
+  --namespace "$namespace" \
   --kube-version 1.21.1 \
-  --values deploy/helm/mm-bot-manager/examples/values-internal-longhorn.yaml \
+  --values "$values_file" \
   --show-only templates/restore-job.yaml \
   --set database.internal.restore.enabled=true \
-  --set-string database.internal.restore.file=mm-bot-manager-20260728T020000Z.dump \
-  >restore-job.yaml
-kubectl -n mm-bot-manager create -f restore-job.yaml
-kubectl -n mm-bot-manager wait \
-  --for=condition=complete job/mm-bot-manager-restore \
-  --timeout=30m
-kubectl -n mm-bot-manager logs job/mm-bot-manager-restore
-kubectl -n mm-bot-manager delete job/mm-bot-manager-restore
+  --set-string "database.internal.restore.file=$restore_file" \
+  >"$restore_manifest"
+restore_job="$(kubectl -n "$namespace" create -f "$restore_manifest" \
+  -o jsonpath='{.metadata.name}')"
+kubectl -n "$namespace" wait \
+  --for=condition=complete "job/$restore_job" --timeout=30m
+kubectl -n "$namespace" logs "job/$restore_job"
+kubectl -n "$namespace" delete "job/$restore_job" --wait=true
 
-kubectl -n mm-bot-manager scale deployment/mm-bot-manager --replicas=1
-kubectl -n mm-bot-manager rollout status deployment/mm-bot-manager
+kubectl -n "$namespace" scale "deployment/$deployment" --replicas=1
+kubectl -n "$namespace" rollout status "deployment/$deployment" --timeout=10m
 ```
 
 Replace the sample filename with a filename shown by the archive-inspection

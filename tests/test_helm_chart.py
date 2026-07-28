@@ -92,6 +92,24 @@ def test_application_has_security_context_tmp_and_probes() -> None:
     assert container["volumeMounts"] == [{"name": "tmp", "mountPath": "/tmp"}]
 
 
+def test_configmap_changes_roll_the_application_pod_template() -> None:
+    original = by_kind(render("values-external.yaml"), "Deployment")[0]
+    changed = by_kind(
+        render(
+            "values-external.yaml",
+            "--set-string",
+            "mattermost.url=https://changed.internal.example",
+        ),
+        "Deployment",
+    )[0]
+
+    original_annotations = original["spec"]["template"]["metadata"]["annotations"]
+    changed_annotations = changed["spec"]["template"]["metadata"]["annotations"]
+    assert original_annotations["checksum/config"]
+    assert changed_annotations["checksum/config"]
+    assert original_annotations["checksum/config"] != changed_annotations["checksum/config"]
+
+
 def test_internal_longhorn_profile_renders_database_and_backup() -> None:
     resources = render("values-internal-longhorn.yaml")
     kinds = {resource["kind"] for resource in resources}
@@ -106,6 +124,11 @@ def test_internal_longhorn_profile_renders_database_and_backup() -> None:
     cronjob = by_kind(resources, "CronJob")[0]
     assert cronjob["apiVersion"] == "batch/v1"
     assert cronjob["spec"]["concurrencyPolicy"] == "Forbid"
+    assert cronjob["spec"]["jobTemplate"]["metadata"]["labels"] == {
+        "app.kubernetes.io/name": "mm-bot-manager",
+        "app.kubernetes.io/instance": "mmbot",
+        "app.kubernetes.io/component": "backup",
+    }
     script = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["args"][0]
     assert "pg_dump --format=custom" in script
     assert "pg_restore --list" in script

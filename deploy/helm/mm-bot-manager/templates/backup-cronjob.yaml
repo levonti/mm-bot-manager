@@ -12,6 +12,10 @@ spec:
   successfulJobsHistoryLimit: {{ .Values.database.internal.backup.successfulJobsHistoryLimit }}
   failedJobsHistoryLimit: {{ .Values.database.internal.backup.failedJobsHistoryLimit }}
   jobTemplate:
+    metadata:
+      labels:
+        {{- include "mm-bot-manager.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backup
     spec:
       template:
         metadata:

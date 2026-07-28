@@ -79,26 +79,32 @@ the chart reads the listed fixed keys and does not create Secrets itself.
 
 ## Validate and render
 
-Run these commands from the source distribution (or the unpacked chart directory):
+The following commands are chart-local: run them after changing into this chart
+directory (for example, `cd mm-bot-manager` after unpacking the packaged chart).
+They do not require the surrounding source repository.
 
 ```bash
-helm lint deploy/helm/mm-bot-manager
+helm lint .
 
-helm template mm-bot-manager deploy/helm/mm-bot-manager \
+helm template mm-bot-manager . \
   --namespace mm-bot-manager --kube-version 1.21.1 \
-  --values deploy/helm/mm-bot-manager/examples/values-external.yaml
-helm template mm-bot-manager deploy/helm/mm-bot-manager \
+  --values examples/values-external.yaml
+helm template mm-bot-manager . \
   --namespace mm-bot-manager --kube-version 1.21.1 \
-  --values deploy/helm/mm-bot-manager/examples/values-internal-longhorn.yaml
-helm template mm-bot-manager deploy/helm/mm-bot-manager \
+  --values examples/values-internal-longhorn.yaml
+helm template mm-bot-manager . \
   --namespace mm-bot-manager --kube-version 1.21.1 \
-  --values deploy/helm/mm-bot-manager/examples/values-internal-local-path.yaml
-helm template mm-bot-manager deploy/helm/mm-bot-manager \
+  --values examples/values-internal-local-path.yaml
+helm template mm-bot-manager . \
   --namespace mm-bot-manager --kube-version 1.21.1 \
-  --values deploy/helm/mm-bot-manager/examples/values-harbor.yaml
+  --values examples/values-harbor.yaml
 
-helm package deploy/helm/mm-bot-manager
+helm package .
 ```
+
+From a source checkout's repository root, set `chart=deploy/helm/mm-bot-manager`
+and use `"$chart"` in place of `.` and `"$chart"/examples/...` in place of
+`examples/...`.
 
 The packaged chart contains all templates, values, examples, and this README;
 it does not download dependencies. Use `examples/values-external.yaml` for an
