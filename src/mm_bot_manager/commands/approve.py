@@ -37,9 +37,7 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     ctx.pending_repo.resolve(request_id, status="approved", resolved_by=ctx.caller_user_id)
 
     try:
-        dm = await ctx.bot_mm.create_direct_channel(
-            ctx.manager_user_id, req.requester_user_id
-        )
+        dm = await ctx.bot_mm.create_direct_channel(ctx.manager_user_id, req.requester_user_id)
         await ctx.bot_mm.create_post(
             channel_id=dm["id"],
             message=(

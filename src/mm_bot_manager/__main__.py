@@ -77,9 +77,7 @@ async def main_async() -> None:
             manager_username = me["username"]
             log.info("logged_in", user_id=manager_user_id, username=manager_username)
 
-            approver_ids = await _resolve_approvers(
-                admin_mm, settings.approver_usernames, log
-            )
+            approver_ids = await _resolve_approvers(admin_mm, settings.approver_usernames, log)
             if approver_ids:
                 log.info("approval_required", approver_count=len(approver_ids))
             else:
