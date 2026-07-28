@@ -81,12 +81,33 @@ def connect(db_path: str) -> DbConn:
     return DbConn(raw, dialect="sqlite")
 
 
-def connect_postgres(dsn: str) -> DbConn:
-    """Connect to PostgreSQL 15+. Requires the ``psycopg`` package."""
-    import psycopg  # type: ignore[import-not-found]
-    from psycopg.rows import dict_row  # type: ignore[import-not-found]
+def connect_postgres(
+    dsn: str | None = None,
+    *,
+    host: str | None = None,
+    port: int = 5432,
+    dbname: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+) -> DbConn:
+    """Connect to PostgreSQL 15+ by DSN or discrete parameters."""
+    import psycopg  # type: ignore[import-not-found, unused-ignore]
+    from psycopg.rows import dict_row  # type: ignore[import-not-found, unused-ignore]
 
-    raw = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
+    if dsn is not None:
+        raw = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
+    else:
+        if not all((host, dbname, user, password)):
+            raise ValueError("host, dbname, user and password are required without a DSN")
+        raw = psycopg.connect(
+            host=host,
+            port=port,
+            dbname=dbname,
+            user=user,
+            password=password,
+            row_factory=dict_row,
+            autocommit=True,
+        )
     return DbConn(raw, dialect="postgres")
 
 

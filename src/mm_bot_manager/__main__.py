@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 
-from .config import load_settings
+from .config import Settings, load_settings
 from .db import DbConn, connect, connect_postgres, init_schema
 from .dispatcher import CommandContextFactory, MessageRouter, handle_event
 from .logging import configure_logging, get_logger
@@ -26,16 +26,27 @@ async def _resolve_approvers(
     return frozenset(ids)
 
 
+def _connect_database(settings: Settings) -> DbConn:
+    if settings.db_url:
+        return connect_postgres(settings.db_url)
+    if settings.db_host:
+        return connect_postgres(
+            None,
+            host=settings.db_host,
+            port=settings.db_port,
+            dbname=settings.db_name,
+            user=settings.db_user,
+            password=settings.db_password,
+        )
+    return connect(settings.db_path)
+
+
 async def main_async() -> None:
     settings = load_settings()
     configure_logging(settings.log_level)
     log = get_logger("mm_bot_manager")
 
-    conn: DbConn = (
-        connect_postgres(settings.db_url)
-        if settings.db_url
-        else connect(settings.db_path)
-    )
+    conn = _connect_database(settings)
     init_schema(conn)
     bot_repo = BotRepo(conn)
     token_repo = TokenRepo(conn)
