@@ -107,6 +107,9 @@ def test_internal_longhorn_profile_renders_database_and_backup() -> None:
     script = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["args"][0]
     assert "pg_dump --format=custom" in script
     assert "pg_restore --list" in script
+    retention_line = next(line for line in script.splitlines() if line.startswith("find "))
+    assert retention_line.endswith("\\")
+    assert not retention_line.endswith("\\\\")
 
 
 def test_local_path_profile_changes_both_claims() -> None:

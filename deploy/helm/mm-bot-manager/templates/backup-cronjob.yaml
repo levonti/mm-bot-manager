@@ -43,7 +43,7 @@ spec:
                   mv "$temporary" "$final"
                   trap - EXIT
                   printf 'backup created: %s\n' "$final"
-                  find /backups -type f -name 'mm-bot-manager-*.dump' \\
+                  find /backups -type f -name 'mm-bot-manager-*.dump' \
                     -mtime "+${RETENTION_DAYS}" -delete
               env:
                 - name: PGHOST
