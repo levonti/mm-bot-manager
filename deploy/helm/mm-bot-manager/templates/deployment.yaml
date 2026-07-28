@@ -1,0 +1,154 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mm-bot-manager.fullname" . }}
+  labels:
+    {{- include "mm-bot-manager.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "mm-bot-manager.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "mm-bot-manager.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "mm-bot-manager.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mm-bot-manager
+          image: {{ include "mm-bot-manager.appImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.health.port }}
+              protocol: TCP
+          env:
+            - name: MM_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mm-bot-manager.fullname" . }}
+                  key: MM_URL
+            - name: MM_APPROVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mm-bot-manager.fullname" . }}
+                  key: MM_APPROVERS
+            - name: MM_VERIFY_SSL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mm-bot-manager.fullname" . }}
+                  key: MM_VERIFY_SSL
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mm-bot-manager.fullname" . }}
+                  key: LOG_LEVEL
+            - name: HEALTH_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mm-bot-manager.fullname" . }}
+                  key: HEALTH_HOST
+            - name: HEALTH_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mm-bot-manager.fullname" . }}
+                  key: HEALTH_PORT
+            - name: MM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.existingSecret }}
+                  key: MM_TOKEN
+            - name: MM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.existingSecret }}
+                  key: MM_BOT_TOKEN
+            {{- if eq .Values.database.mode "external" }}
+            - name: DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.external.existingSecret }}
+                  key: DB_URL
+            {{- else if eq .Values.database.mode "internal" }}
+            - name: DB_HOST
+              value: {{ include "mm-bot-manager.postgresqlFullname" . | quote }}
+            - name: DB_PORT
+              value: {{ .Values.database.internal.service.port | toString | quote }}
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.internal.auth.existingSecret }}
+                  key: POSTGRES_DB
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.internal.auth.existingSecret }}
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.internal.auth.existingSecret }}
+                  key: POSTGRES_PASSWORD
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,19 @@
+{{- if eq .Values.database.mode "internal" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mm-bot-manager.postgresqlFullname" . }}
+  labels:
+    {{- include "mm-bot-manager.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  clusterIP: None
+  ports:
+    - name: postgresql
+      port: {{ .Values.database.internal.service.port }}
+      targetPort: postgresql
+      protocol: TCP
+  selector:
+    {{- include "mm-bot-manager.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+{{- end }}

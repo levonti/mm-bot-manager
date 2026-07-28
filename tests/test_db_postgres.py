@@ -37,6 +37,7 @@ def repos(pg_conn: DbConn) -> tuple[BotRepo, TokenRepo, PendingRequestRepo]:  # 
 
 # ── BotRepo ───────────────────────────────────────────────────────────────────
 
+
 def test_insert_and_fetch_bot(repos):
     bots, _, __ = repos
     b = bots.insert(
@@ -102,6 +103,7 @@ def test_soft_delete(repos):
 
 # ── TokenRepo ─────────────────────────────────────────────────────────────────
 
+
 def test_token_lifecycle(repos):
     bots, tokens, _ = repos
     bots.insert(
@@ -124,6 +126,7 @@ def test_token_lifecycle(repos):
 
 
 # ── PendingRequestRepo ────────────────────────────────────────────────────────
+
 
 def test_pending_request_lifecycle(repos):
     _, __, pending = repos

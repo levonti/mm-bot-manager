@@ -1,4 +1,6 @@
-from pydantic import Field, HttpUrl
+from typing import Self
+
+from pydantic import Field, HttpUrl, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +31,13 @@ class Settings(BaseSettings):
         description="PostgreSQL DSN (e.g. postgresql://user:pass@host/db). "
         "When set, takes precedence over db_path.",
     )
+    db_host: str | None = Field(default=None)
+    db_port: int = Field(default=5432, ge=1, le=65535)
+    db_name: str | None = Field(default=None)
+    db_user: str | None = Field(default=None)
+    db_password: str | None = Field(default=None)
+    health_host: str = Field(default="127.0.0.1")
+    health_port: int = Field(default=8080, ge=1, le=65535)
     log_level: str = Field(default="INFO")
     mm_verify_ssl: bool = Field(default=True)
     # Comma-separated Mattermost usernames of users who can approve bot creation.
@@ -53,6 +62,25 @@ class Settings(BaseSettings):
         else:
             ws = base
         return f"{ws}/api/v4/websocket"
+
+    @model_validator(mode="after")
+    def validate_database_settings(self) -> Self:
+        if self.db_url is not None:
+            return self
+        if self.db_host is None:
+            return self
+        missing = [
+            env_name
+            for env_name, value in (
+                ("DB_NAME", self.db_name),
+                ("DB_USER", self.db_user),
+                ("DB_PASSWORD", self.db_password),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(f"DB_HOST requires {', '.join(missing)}")
+        return self
 
 
 def load_settings() -> Settings:

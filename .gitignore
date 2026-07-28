@@ -12,6 +12,9 @@ dist/
 .venv/
 .python-version
 
+# Isolated agent worktrees
+/.worktrees/
+
 # Testing & analysis
 .pytest_cache/
 .coverage
@@ -27,6 +30,12 @@ dmypy.json
 
 # Environment / secrets
 .env
+
+# Kubernetes Secret working copies
+/app-secret.env
+/external-db-secret.env
+/internal-db-secret.env
+deploy/helm/**/examples/*.env
 
 # Runtime data (SQLite volume mounted here locally)
 data/
