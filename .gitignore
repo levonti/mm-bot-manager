@@ -12,6 +12,9 @@ dist/
 .venv/
 .python-version
 
+# Isolated agent worktrees
+/.worktrees/
+
 # Testing & analysis
 .pytest_cache/
 .coverage
