@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -9,6 +10,7 @@ import yaml
 ROOT = Path(__file__).parents[1]
 CHART = ROOT / "deploy/helm/mm-bot-manager"
 HELM = shutil.which("helm")
+VERIFY_KUBERNETES = ROOT / "scripts/verify-kubernetes.sh"
 pytestmark = pytest.mark.skipif(HELM is None, reason="helm is required")
 
 
@@ -236,3 +238,116 @@ def test_chart_never_renders_secret_or_ingress() -> None:
         kinds = {resource["kind"] for resource in render(profile)}
         assert "Secret" not in kinds
         assert "Ingress" not in kinds
+
+
+def test_schema_rejects_unknown_toleration_and_affinity_fields() -> None:
+    for extra, expected_path in (
+        (("--set", "tolerations[0].unexpected=value"), "tolerations/0"),
+        (("--set", "affinity.unexpected=value"), "affinity"),
+    ):
+        result = subprocess.run(
+            [
+                str(HELM),
+                "template",
+                "mmbot",
+                str(CHART),
+                "--values",
+                str(CHART / "examples" / "values-external.yaml"),
+                *extra,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0
+        assert expected_path in result.stderr
+
+
+def test_schema_requires_only_the_active_database_secret() -> None:
+    assert render(
+        "values-external.yaml",
+        "--set-string",
+        "database.internal.auth.existingSecret=",
+    )
+    assert render(
+        "values-internal-longhorn.yaml",
+        "--set-string",
+        "database.external.existingSecret=",
+    )
+
+    for values, setting, expected_path in (
+        (
+            "values-external.yaml",
+            "database.external.existingSecret=",
+            "external/existingSecret",
+        ),
+        (
+            "values-internal-longhorn.yaml",
+            "database.internal.auth.existingSecret=",
+            "internal/auth/existingSecret",
+        ),
+    ):
+        result = subprocess.run(
+            [
+                str(HELM),
+                "template",
+                "mmbot",
+                str(CHART),
+                "--values",
+                str(CHART / "examples" / values),
+                "--set-string",
+                setting,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0
+        assert expected_path in result.stderr
+
+
+def test_verify_script_requires_an_explicit_local_schema_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("KUBECONFORM_SCHEMA_LOCATION", raising=False)
+
+    result = subprocess.run(
+        [str(VERIFY_KUBERNETES)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "KUBECONFORM_SCHEMA_LOCATION" in result.stderr
+    assert "local directory" in result.stderr
+
+
+def test_verify_script_passes_only_a_local_schema_location(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    schema_dir = tmp_path / "schemas"
+    schema_dir.mkdir()
+    kubeconform_arguments = tmp_path / "kubeconform-arguments"
+
+    helm = tools / "helm"
+    helm.write_text("#!/usr/bin/env bash\nexit 0\n")
+    helm.chmod(0o755)
+    kubeconform = tools / "kubeconform"
+    kubeconform.write_text(
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" >"$KUBECONFORM_ARGUMENT_LOG"\n'
+    )
+    kubeconform.chmod(0o755)
+
+    monkeypatch.setenv("PATH", f"{tools}:{os.environ['PATH']}")
+    monkeypatch.setenv("KUBECONFORM_SCHEMA_LOCATION", str(schema_dir))
+    monkeypatch.setenv("KUBECONFORM_ARGUMENT_LOG", str(kubeconform_arguments))
+
+    result = subprocess.run([str(VERIFY_KUBERNETES)], cwd=ROOT, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    arguments = kubeconform_arguments.read_text()
+    assert "-schema-location" in arguments
+    assert str(schema_dir) in arguments
+    assert "raw.githubusercontent.com" not in arguments

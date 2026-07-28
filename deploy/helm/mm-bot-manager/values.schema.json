@@ -82,9 +82,9 @@
     "nodeSelector": { "$ref": "#/definitions/stringMap" },
     "tolerations": {
       "type": "array",
-      "items": { "type": "object" }
+      "items": { "$ref": "#/definitions/toleration" }
     },
-    "affinity": { "type": "object" },
+    "affinity": { "$ref": "#/definitions/affinity" },
     "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
     "database": {
       "type": "object",
@@ -95,9 +95,8 @@
         "external": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["existingSecret"],
           "properties": {
-            "existingSecret": { "$ref": "#/definitions/nonEmptyString" }
+            "existingSecret": { "type": "string" }
           }
         },
         "internal": { "$ref": "#/definitions/internalDatabase" }
@@ -108,7 +107,12 @@
           "then": {
             "required": ["external"],
             "properties": {
-              "external": { "required": ["existingSecret"] }
+              "external": {
+                "required": ["existingSecret"],
+                "properties": {
+                  "existingSecret": { "$ref": "#/definitions/nonEmptyString" }
+                }
+              }
             }
           }
         },
@@ -118,7 +122,15 @@
             "required": ["internal"],
             "properties": {
               "internal": {
-                "required": ["image", "auth", "storage", "backup"]
+                "required": ["image", "auth", "storage", "backup"],
+                "properties": {
+                  "auth": {
+                    "required": ["existingSecret"],
+                    "properties": {
+                      "existingSecret": { "$ref": "#/definitions/nonEmptyString" }
+                    }
+                  }
+                }
               }
             }
           }
@@ -150,6 +162,148 @@
       "additionalProperties": {
         "type": "object",
         "additionalProperties": { "$ref": "#/definitions/positiveQuantity" }
+      }
+    },
+    "toleration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string" },
+        "operator": { "enum": ["Exists", "Equal"] },
+        "value": { "type": "string" },
+        "effect": { "enum": ["NoSchedule", "PreferNoSchedule", "NoExecute"] },
+        "tolerationSeconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "labelSelectorRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "operator"],
+      "properties": {
+        "key": { "$ref": "#/definitions/nonEmptyString" },
+        "operator": { "enum": ["In", "NotIn", "Exists", "DoesNotExist"] },
+        "values": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "labelSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "matchLabels": { "$ref": "#/definitions/stringMap" },
+        "matchExpressions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/labelSelectorRequirement" }
+        }
+      }
+    },
+    "nodeSelectorRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "operator"],
+      "properties": {
+        "key": { "$ref": "#/definitions/nonEmptyString" },
+        "operator": { "enum": ["In", "NotIn", "Exists", "DoesNotExist", "Gt", "Lt"] },
+        "values": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "nodeSelectorTerm": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "matchExpressions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/nodeSelectorRequirement" }
+        },
+        "matchFields": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/nodeSelectorRequirement" }
+        }
+      }
+    },
+    "nodeSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeSelectorTerms"],
+      "properties": {
+        "nodeSelectorTerms": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/nodeSelectorTerm" }
+        }
+      }
+    },
+    "preferredSchedulingTerm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["weight", "preference"],
+      "properties": {
+        "weight": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "preference": { "$ref": "#/definitions/nodeSelectorTerm" }
+      }
+    },
+    "nodeAffinity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+          "$ref": "#/definitions/nodeSelector"
+        },
+        "preferredDuringSchedulingIgnoredDuringExecution": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/preferredSchedulingTerm" }
+        }
+      }
+    },
+    "podAffinityTerm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["topologyKey"],
+      "properties": {
+        "labelSelector": { "$ref": "#/definitions/labelSelector" },
+        "namespaces": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "namespaceSelector": { "$ref": "#/definitions/labelSelector" },
+        "topologyKey": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "weightedPodAffinityTerm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["weight", "podAffinityTerm"],
+      "properties": {
+        "weight": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "podAffinityTerm": { "$ref": "#/definitions/podAffinityTerm" }
+      }
+    },
+    "podAffinity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/podAffinityTerm" }
+        },
+        "preferredDuringSchedulingIgnoredDuringExecution": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/weightedPodAffinityTerm" }
+        }
+      }
+    },
+    "affinity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nodeAffinity": { "$ref": "#/definitions/nodeAffinity" },
+        "podAffinity": { "$ref": "#/definitions/podAffinity" },
+        "podAntiAffinity": { "$ref": "#/definitions/podAffinity" }
       }
     },
     "image": {
@@ -220,9 +374,8 @@
     "databaseAuth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["existingSecret"],
       "properties": {
-        "existingSecret": { "$ref": "#/definitions/nonEmptyString" }
+        "existingSecret": { "type": "string" }
       }
     },
     "storage": {
