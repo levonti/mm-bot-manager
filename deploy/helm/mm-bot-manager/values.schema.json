@@ -1,0 +1,322 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "mm-bot-manager Helm values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "image",
+    "imagePullSecrets",
+    "nameOverride",
+    "fullnameOverride",
+    "app",
+    "mattermost",
+    "logLevel",
+    "health",
+    "probes",
+    "serviceAccount",
+    "podAnnotations",
+    "podLabels",
+    "podSecurityContext",
+    "containerSecurityContext",
+    "resources",
+    "nodeSelector",
+    "tolerations",
+    "affinity",
+    "terminationGracePeriodSeconds",
+    "database"
+  ],
+  "properties": {
+    "image": { "$ref": "#/definitions/image" },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": { "name": { "$ref": "#/definitions/nonEmptyString" } }
+      }
+    },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["existingSecret"],
+      "properties": { "existingSecret": { "$ref": "#/definitions/nonEmptyString" } }
+    },
+    "mattermost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "approvers", "verifySSL"],
+      "properties": {
+        "url": { "type": "string", "format": "uri", "minLength": 1 },
+        "approvers": { "type": "string" },
+        "verifySSL": { "type": "boolean" }
+      }
+    },
+    "logLevel": { "enum": ["DEBUG", "INFO", "WARNING", "ERROR"] },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "port"],
+      "properties": {
+        "host": { "$ref": "#/definitions/nonEmptyString" },
+        "port": { "$ref": "#/definitions/port" }
+      }
+    },
+    "probes": { "$ref": "#/definitions/probes" },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["create", "name"],
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" }
+      }
+    },
+    "podAnnotations": { "$ref": "#/definitions/stringMap" },
+    "podLabels": { "$ref": "#/definitions/stringMap" },
+    "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
+    "containerSecurityContext": { "$ref": "#/definitions/containerSecurityContext" },
+    "resources": { "$ref": "#/definitions/resources" },
+    "nodeSelector": { "$ref": "#/definitions/stringMap" },
+    "tolerations": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "affinity": { "type": "object" },
+    "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "external", "internal"],
+      "properties": {
+        "mode": { "enum": ["external", "internal"] },
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["existingSecret"],
+          "properties": {
+            "existingSecret": { "$ref": "#/definitions/nonEmptyString" }
+          }
+        },
+        "internal": { "$ref": "#/definitions/internalDatabase" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "external" } } },
+          "then": {
+            "required": ["external"],
+            "properties": {
+              "external": { "required": ["existingSecret"] }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "internal" } } },
+          "then": {
+            "required": ["internal"],
+            "properties": {
+              "internal": {
+                "required": ["image", "auth", "storage", "backup"]
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "positiveQuantity": {
+      "type": "string",
+      "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?)(?:Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|k|m)?$"
+    },
+    "storageQuantity": {
+      "type": "string",
+      "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?)(?:Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|k)?$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^$|^sha256:[0-9a-f]{64}$"
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": { "$ref": "#/definitions/positiveQuantity" }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "digest", "pullPolicy"],
+      "properties": {
+        "repository": { "$ref": "#/definitions/nonEmptyString" },
+        "tag": { "type": "string" },
+        "digest": { "$ref": "#/definitions/digest" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["periodSeconds", "timeoutSeconds", "failureThreshold"],
+      "properties": {
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "probes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startup", "readiness", "liveness"],
+      "properties": {
+        "startup": { "$ref": "#/definitions/probe" },
+        "readiness": { "$ref": "#/definitions/probe" },
+        "liveness": { "$ref": "#/definitions/probe" }
+      }
+    },
+    "podSecurityContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runAsNonRoot": { "type": "boolean" },
+        "runAsUser": { "type": "integer", "minimum": 0 },
+        "runAsGroup": { "type": "integer", "minimum": 0 },
+        "seccompProfile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": { "type": { "type": "string", "minLength": 1 } }
+        }
+      }
+    },
+    "containerSecurityContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowPrivilegeEscalation": { "type": "boolean" },
+        "readOnlyRootFilesystem": { "type": "boolean" },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["drop"],
+          "properties": {
+            "drop": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "databaseAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["existingSecret"],
+      "properties": {
+        "existingSecret": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["storageClass", "accessModes", "size"],
+      "properties": {
+        "storageClass": { "$ref": "#/definitions/nonEmptyString" },
+        "accessModes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"]
+          }
+        },
+        "size": { "$ref": "#/definitions/storageQuantity" }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "schedule",
+        "retentionDays",
+        "successfulJobsHistoryLimit",
+        "failedJobsHistoryLimit",
+        "storageClass",
+        "accessModes",
+        "size",
+        "resources"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "schedule": { "$ref": "#/definitions/nonEmptyString" },
+        "retentionDays": { "type": "integer", "minimum": 1 },
+        "successfulJobsHistoryLimit": { "type": "integer", "minimum": 0 },
+        "failedJobsHistoryLimit": { "type": "integer", "minimum": 0 },
+        "storageClass": { "$ref": "#/definitions/nonEmptyString" },
+        "accessModes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"]
+          }
+        },
+        "size": { "$ref": "#/definitions/storageQuantity" },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "restore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "file"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "file": {
+          "type": "string",
+          "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        }
+      }
+    },
+    "internalDatabase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image",
+        "auth",
+        "service",
+        "storage",
+        "podSecurityContext",
+        "containerSecurityContext",
+        "resources",
+        "probes",
+        "backup",
+        "restore"
+      ],
+      "properties": {
+        "image": { "$ref": "#/definitions/image" },
+        "auth": { "$ref": "#/definitions/databaseAuth" },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["port"],
+          "properties": { "port": { "$ref": "#/definitions/port" } }
+        },
+        "storage": { "$ref": "#/definitions/storage" },
+        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
+        "containerSecurityContext": { "$ref": "#/definitions/containerSecurityContext" },
+        "resources": { "$ref": "#/definitions/resources" },
+        "probes": { "$ref": "#/definitions/probes" },
+        "backup": { "$ref": "#/definitions/backup" },
+        "restore": { "$ref": "#/definitions/restore" }
+      }
+    }
+  }
+}

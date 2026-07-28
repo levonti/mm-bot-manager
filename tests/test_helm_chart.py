@@ -148,11 +148,91 @@ def test_restore_job_requires_an_explicit_safe_filename() -> None:
         "mmbot-mm-bot-manager-restore"
     ]
 
-    unsafe = render(
+    result = subprocess.run(
+        [
+            str(HELM),
+            "template",
+            "mmbot",
+            str(CHART),
+            "--values",
+            str(CHART / "examples" / "values-internal-longhorn.yaml"),
+            "--set",
+            "database.internal.restore.enabled=true",
+            "--set",
+            "database.internal.restore.file=../backup.dump",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "restore/file" in result.stderr
+
+
+def workload_images(resources: list[dict[str, Any]]) -> list[str]:
+    images: list[str] = []
+    for resource in resources:
+        if resource["kind"] in {"Deployment", "StatefulSet"}:
+            pod = resource["spec"]["template"]["spec"]
+        elif resource["kind"] == "CronJob":
+            pod = resource["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+        else:
+            continue
+        images.extend(container["image"] for container in pod.get("containers", []))
+    return images
+
+
+def test_harbor_profile_uses_only_local_registry() -> None:
+    images = workload_images(render("values-harbor.yaml"))
+    assert images
+    assert all(image.startswith("harbor.internal.example/") for image in images)
+
+
+def test_digest_takes_precedence_over_tag() -> None:
+    digest = "sha256:" + "a" * 64
+    deployment = by_kind(
+        render("values-external.yaml", "--set", f"image.digest={digest}"),
+        "Deployment",
+    )[0]
+    image = deployment["spec"]["template"]["spec"]["containers"][0]["image"]
+    assert image == f"mm-bot-manager@{digest}"
+
+
+def test_postgresql_digest_takes_precedence_for_database_and_backup() -> None:
+    digest = "sha256:" + "b" * 64
+    resources = render(
         "values-internal-longhorn.yaml",
         "--set",
-        "database.internal.restore.enabled=true",
-        "--set",
-        "database.internal.restore.file=../backup.dump",
+        f"database.internal.image.digest={digest}",
     )
-    assert by_kind(unsafe, "Job") == []
+    images = workload_images(resources)
+    assert f"postgres@{digest}" in images
+    assert all(image == f"postgres@{digest}" for image in images if image.startswith("postgres"))
+
+
+def test_schema_rejects_an_unknown_database_mode() -> None:
+    result = subprocess.run(
+        [
+            str(HELM),
+            "template",
+            "mmbot",
+            str(CHART),
+            "--set",
+            "database.mode=sqlite",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "database/mode" in result.stderr
+
+
+def test_chart_never_renders_secret_or_ingress() -> None:
+    for profile in (
+        "values-external.yaml",
+        "values-internal-longhorn.yaml",
+        "values-internal-local-path.yaml",
+        "values-harbor.yaml",
+    ):
+        kinds = {resource["kind"] for resource in render(profile)}
+        assert "Secret" not in kinds
+        assert "Ingress" not in kinds
