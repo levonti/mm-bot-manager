@@ -1,0 +1,8 @@
+app:
+  existingSecret: mm-bot-manager-app
+mattermost:
+  url: https://mm.internal.example
+database:
+  mode: external
+  external:
+    existingSecret: mm-bot-manager-external-db

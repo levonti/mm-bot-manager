@@ -1,0 +1,7 @@
+apiVersion: v2
+name: mm-bot-manager
+description: Mattermost bot manager
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.21.1-0"
