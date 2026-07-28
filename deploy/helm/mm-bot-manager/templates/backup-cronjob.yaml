@@ -1,0 +1,79 @@
+{{- if and (eq .Values.database.mode "internal") .Values.database.internal.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "mm-bot-manager.backupFullname" . }}
+  labels:
+    {{- include "mm-bot-manager.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.database.internal.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.database.internal.backup.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.database.internal.backup.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "mm-bot-manager.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: backup
+              image: {{ include "mm-bot-manager.postgresImage" . }}
+              imagePullPolicy: {{ .Values.database.internal.image.pullPolicy }}
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  set -eu
+                  umask 077
+                  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+                  temporary="/backups/.mm-bot-manager-${timestamp}.dump.tmp"
+                  final="/backups/mm-bot-manager-${timestamp}.dump"
+                  trap 'rm -f "$temporary"' EXIT
+                  pg_dump --format=custom --file="$temporary"
+                  pg_restore --list "$temporary" >/dev/null
+                  mv "$temporary" "$final"
+                  trap - EXIT
+                  printf 'backup created: %s\n' "$final"
+                  find /backups -type f -name 'mm-bot-manager-*.dump' \\
+                    -mtime "+${RETENTION_DAYS}" -delete
+              env:
+                - name: PGHOST
+                  value: {{ include "mm-bot-manager.postgresqlFullname" . | quote }}
+                - name: PGPORT
+                  value: {{ .Values.database.internal.service.port | toString | quote }}
+                - name: PGDATABASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.database.internal.auth.existingSecret }}
+                      key: POSTGRES_DB
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.database.internal.auth.existingSecret }}
+                      key: POSTGRES_USER
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.database.internal.auth.existingSecret }}
+                      key: POSTGRES_PASSWORD
+                - name: RETENTION_DAYS
+                  value: {{ .Values.database.internal.backup.retentionDays | toString | quote }}
+              resources:
+                {{- toYaml .Values.database.internal.backup.resources | nindent 16 }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ include "mm-bot-manager.backupFullname" . }}
+{{- end }}

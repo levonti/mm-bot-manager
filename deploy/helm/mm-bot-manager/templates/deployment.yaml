@@ -91,7 +91,7 @@ spec:
                   key: DB_URL
             {{- else if eq .Values.database.mode "internal" }}
             - name: DB_HOST
-              value: {{ printf "%s-postgresql" (include "mm-bot-manager.fullname" .) | quote }}
+              value: {{ include "mm-bot-manager.postgresqlFullname" . | quote }}
             - name: DB_PORT
               value: {{ .Values.database.internal.service.port | toString | quote }}
             - name: DB_NAME

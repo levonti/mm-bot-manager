@@ -64,3 +64,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "%s:%s" .Values.database.internal.image.repository .Values.database.internal.image.tag }}
 {{- end }}
 {{- end }}
+
+{{/* Names for internal PostgreSQL resources. */}}
+{{- define "mm-bot-manager.postgresqlFullname" -}}
+{{- printf "%s-postgresql" (include "mm-bot-manager.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "mm-bot-manager.backupFullname" -}}
+{{- printf "%s-backup" (include "mm-bot-manager.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "mm-bot-manager.restoreFullname" -}}
+{{- printf "%s-restore" (include "mm-bot-manager.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
