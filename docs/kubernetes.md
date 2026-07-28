@@ -192,11 +192,14 @@ kubectl -n "$namespace" rollout status deployment \
   -l "app.kubernetes.io/instance=$release" --timeout=10m
 ```
 
-This verifies the refreshed credentials by recreating the application Pod. New
-backup and restore Pods use the updated Secret automatically. Restart the
-PostgreSQL StatefulSet only during a planned maintenance window if it must also
-perform a fresh pull immediately; an existing running container does not need a
-registry credential refresh.
+This verifies that the Secret was updated and that the application rollout
+completed. It does **not** by itself verify the new Harbor credentials: the
+chart's default `IfNotPresent` policy may reuse an image already cached on the
+node. The refreshed Secret is used whenever a node has to pull an image. To
+actively validate credentials, make a planned Helm upgrade to a new immutable
+image digest (or tag known not to be present on the target node), then wait for
+that Pod to become Ready. Validate the PostgreSQL repository separately during a
+maintenance window if its Harbor permissions differ from the application image.
 
 `imagePullSecrets` authenticates image pulls; it does not make a private Harbor
 CA trusted. Install the Harbor CA in containerd, CRI-O, or Docker configuration
@@ -310,11 +313,12 @@ kubectl -n mm-bot-manager delete pod backup-inspector
 
 To restore, first list archives with the preceding temporary Pod and choose an
 existing safe basename. A restore is destructive: suspend the backup CronJob and
-wait until every active backup Job has completed before scaling the application
-down. The following Bash procedure keeps its release, namespace, chart, and
-values profile in quoted variables. Its cleanup handler resumes the CronJob if
-this procedure suspended it, even when a later command fails or is interrupted.
-It leaves a CronJob that was already suspended in that state.
+wait until every non-terminal backup Job has completed or failed before scaling
+the application down. The following Bash procedure keeps its release,
+namespace, chart, and values profile in quoted variables. Its cleanup handler
+resumes the CronJob only if this procedure suspended it and no restore Job is
+still running or in an unknown state. It leaves a CronJob that was already
+suspended in that state.
 
 Run it from a source checkout after setting `values_file` to the exact internal
 profile used by the release. The chart labels backup Jobs specifically so the
@@ -328,6 +332,9 @@ chart="deploy/helm/mm-bot-manager"
 values_file="$chart/examples/values-internal-longhorn.yaml"
 restore_file="mm-bot-manager-20260728T020000Z.dump"
 restore_manifest=""
+restore_job=""
+restore_started=false
+restore_terminal=false
 resume_backup=false
 
 deployment="$(kubectl -n "$namespace" get deployment \
@@ -343,12 +350,15 @@ cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
   test -z "$restore_manifest" || rm -f "$restore_manifest"
-  if "$resume_backup"; then
+  if [ "$resume_backup" = true ] && { [ "$restore_started" = false ] || [ "$restore_terminal" = true ]; }; then
     if ! kubectl -n "$namespace" patch cronjob "$backup_cronjob" \
       --type=merge -p '{"spec":{"suspend":false}}'; then
       printf '%s\n' "ERROR: could not resume backup CronJob $backup_cronjob" >&2
       status=1
     fi
+  elif [ "$resume_backup" = true ]; then
+    printf '%s\n' \
+      "Backup CronJob remains suspended: restore Job ${restore_job:-unknown} may still be running or its creation state is unknown." >&2
   fi
   exit "$status"
 }
@@ -369,16 +379,16 @@ case "$backup_was_suspended" in
     ;;
 esac
 
-active_backup_jobs() {
+nonterminal_backup_jobs() {
   kubectl -n "$namespace" get jobs \
     -l "app.kubernetes.io/instance=$release,app.kubernetes.io/component=backup" \
-    -o go-template='{{range .items}}{{if .status.active}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}'
+    -o go-template='{{range .items}}{{ $terminal := false }}{{range .status.conditions}}{{if and (or (eq .type "Complete") (eq .type "Failed")) (eq .status "True")}}{{ $terminal = true }}{{end}}{{end}}{{if not $terminal}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}'
 }
 while true; do
-  active_jobs="$(active_backup_jobs)"
-  test -z "$active_jobs" && break
+  pending_backup_jobs="$(nonterminal_backup_jobs)"
+  test -z "$pending_backup_jobs" && break
   printf '%s\n%s\n' \
-    "Waiting for active backup Jobs before restore:" "$active_jobs"
+    "Waiting for non-terminal backup Jobs before restore:" "$pending_backup_jobs"
   sleep 5
 done
 
@@ -394,15 +404,64 @@ helm template "$release" "$chart" \
   --set database.internal.restore.enabled=true \
   --set-string "database.internal.restore.file=$restore_file" \
   >"$restore_manifest"
+restore_started=true
 restore_job="$(kubectl -n "$namespace" create -f "$restore_manifest" \
   -o jsonpath='{.metadata.name}')"
-kubectl -n "$namespace" wait \
-  --for=condition=complete "job/$restore_job" --timeout=30m
+if kubectl -n "$namespace" wait \
+  --for=condition=complete "job/$restore_job" --timeout=30m; then
+  restore_terminal=true
+else
+  printf '%s\n' \
+    "Restore did not complete; backup CronJob remains suspended. See the manual procedure below." >&2
+  exit 1
+fi
 kubectl -n "$namespace" logs "job/$restore_job"
 kubectl -n "$namespace" delete "job/$restore_job" --wait=true
 
 kubectl -n "$namespace" scale "deployment/$deployment" --replicas=1
 kubectl -n "$namespace" rollout status "deployment/$deployment" --timeout=10m
+```
+
+If the script reports that the backup CronJob remains suspended, do **not**
+resume it blindly: first make the restore Job terminal, or explicitly abort and
+delete it. Reuse the `namespace`, `backup_cronjob`, and `restore_job` variables
+from the script. Choose exactly one safe path below, then run the resume command
+only after that path succeeds.
+
+If `restore_job` is empty because the client was interrupted while creating it,
+first list the labelled restore Jobs, inspect the intended one, and set the
+variable to that exact name. Do not resume while any candidate is still running;
+repeat the terminal or abort procedure for every candidate if more than one is
+listed.
+
+```bash
+kubectl -n "$namespace" get jobs \
+  -l "app.kubernetes.io/instance=$release,app.kubernetes.io/component=restore"
+restore_job="RESTORE_JOB_NAME_FROM_THE_LIST"
+test -n "$restore_job"
+```
+
+Wait for the restore Job to reach either terminal condition:
+
+```bash
+kubectl -n "$namespace" wait \
+  --for=condition=complete "job/$restore_job" --timeout=30m || \
+  kubectl -n "$namespace" wait \
+    --for=condition=failed "job/$restore_job" --timeout=5m
+
+kubectl -n "$namespace" patch cronjob "$backup_cronjob" \
+  --type=merge -p '{"spec":{"suspend":false}}'
+```
+
+Or, after explicit operator approval to abandon this restore, delete its Job and
+wait for foreground deletion of its Pod(s):
+
+```bash
+kubectl -n "$namespace" delete "job/$restore_job" \
+  --cascade=foreground --wait=true
+
+kubectl -n "$namespace" patch cronjob "$backup_cronjob" \
+  --type=merge -p '{"spec":{"suspend":false}}'
 ```
 
 Replace the sample filename with a filename shown by the archive-inspection
