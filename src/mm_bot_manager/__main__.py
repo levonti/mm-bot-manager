@@ -50,6 +50,7 @@ async def main_async() -> None:
 
     conn = _connect_database(settings)
     background: set[asyncio.Task[None]] = set()
+    health_handlers: set[asyncio.Task[None]] = set()
     loop = asyncio.get_running_loop()
     main_task = asyncio.current_task()
     sigterm_handler_installed = False
@@ -96,7 +97,7 @@ async def main_async() -> None:
             )
 
             health_server = await start_health_server(
-                conn, settings.health_host, settings.health_port
+                conn, settings.health_host, settings.health_port, health_handlers
             )
             log.info(
                 "health_server_started",
@@ -113,6 +114,9 @@ async def main_async() -> None:
                     background.add(task)
                     task.add_done_callback(background.discard)
     finally:
+        for task in health_handlers:
+            task.cancel()
+        await asyncio.gather(*health_handlers, return_exceptions=True)
         for task in background:
             task.cancel()
         await asyncio.gather(*background, return_exceptions=True)
