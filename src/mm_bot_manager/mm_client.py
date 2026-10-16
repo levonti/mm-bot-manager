@@ -59,6 +59,12 @@ class MattermostClient:
     async def get_me(self) -> dict[str, Any]:
         return await self._request("GET", "/users/me")  # type: ignore[no-any-return]
 
+    async def get_user(self, user_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/users/{user_id}")  # type: ignore[no-any-return]
+
+    async def get_bot(self, bot_user_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/bots/{bot_user_id}")  # type: ignore[no-any-return]
+
     async def get_user_by_username(self, username: str) -> dict[str, Any]:
         return await self._request("GET", f"/users/username/{username}")  # type: ignore[no-any-return]
 

@@ -341,3 +341,65 @@ async def test_postgres_approval_failure_rolls_back_ownership(isolated_pg, monke
     assert mm.disabled == ["bot-0"]
     assert not ctx.bot_repo.list_by_owner("alice")
     assert ctx.pending_repo.get("req").status == "failed"
+
+
+async def test_postgres_import_is_atomic_and_retains_audit(isolated_pg, monkeypatch):
+    from mm_bot_manager.imports import approve_import
+    from tests.test_imports import (
+        ALICE,
+        APPROVER,
+        BOT,
+        approver,
+        import_context,
+        request_import,
+        table_count,
+    )
+
+    conn, _ = isolated_pg
+    ctx = import_context(conn)
+    request = await request_import(ctx)
+    original = ctx.bot_repo.insert
+
+    def fail_after_insert(**kwargs):
+        original(**kwargs)
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(ctx.bot_repo, "insert", fail_after_insert)
+    with pytest.raises(RuntimeError, match="write failed"):
+        await approve_import(approver(ctx), request)
+    assert ctx.pending_repo.get(request.request_id).status == "pending"
+    assert table_count(ctx, "bot") == table_count(ctx, "bot_import") == 0
+    ctx.mm.assert_no_bot_mutations()
+    monkeypatch.setattr(ctx.bot_repo, "insert", original)
+    await approve_import(approver(ctx), request)
+    assert ctx.bot_repo.get(BOT).owner_user_id == ALICE
+    audit = conn.execute("SELECT * FROM bot_import").fetchone()
+    assert audit["approved_by"] == APPROVER and audit["submitted_by"] == ALICE
+    assert ctx.pending_repo.get(request.request_id).status == "approved"
+    ctx.mm.assert_no_bot_mutations()
+
+
+def test_postgres_import_schema_upgrade_preserves_legacy_data(isolated_pg):
+    from tests.test_imports import assert_legacy_upgrade
+
+    conn, _ = isolated_pg
+    assert_legacy_upgrade(conn)
+
+
+async def test_postgres_bulk_preview_cannot_write(isolated_pg, pg_dsn):
+    from mm_bot_manager.import_bots import process_mapping
+    from tests.test_imports import ALICE, BOT, import_context
+
+    _, schema = isolated_pg
+    conn = connect_postgres(pg_dsn)
+    try:
+        conn.execute(f'SET search_path TO "{schema}"')
+        conn.execute("SET default_transaction_read_only = on")
+        ctx = import_context(conn)
+        plans, ids = await process_mapping(ctx, [(BOT, ALICE)], submit=False)
+        assert len(plans) == 1 and not ids
+        with pytest.raises(Exception, match="read-only"):
+            conn.execute("DELETE FROM bot")
+        ctx.mm.assert_no_bot_mutations()
+    finally:
+        conn.close()

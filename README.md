@@ -65,7 +65,7 @@ Create a `.env` file (or export variables directly) and fill it in:
 | `MM_URL`        | yes      | —                                 | Base URL of the MM server (`https://...`)                |
 | `MM_TOKEN`      | yes      | —                                 | system_admin PAT (bot management API)                    |
 | `MM_BOT_TOKEN`  | yes      | —                                 | Manager bot access token (WebSocket + posting)            |
-| `MM_APPROVERS`  | no       | empty                             | Comma-separated usernames who approve `!create`          |
+| `MM_APPROVERS`  | no       | empty                             | Comma-separated approver usernames; mandatory for imports |
 | `MM_VERIFY_SSL` | no       | `true`                            | Set `false` for self-signed certificates                 |
 | `DB_PATH`       | no       | `/data/mm-bot-manager.sqlite3`    | SQLite fallback (lowest database precedence)             |
 | `DB_URL`        | no       | —                                 | PostgreSQL DSN (highest database precedence)             |
@@ -94,15 +94,76 @@ Every command must start with `!`. New bot usernames passed to `!create` must en
 | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | `!help`                                                                                              | Show the command cheatsheet                                           |
 | `!create <username> [--display-name "..."] [--description "..."]`                                    | Create a bot; you become its owner (may require approver approval)    |
+| `!import <existing-bot-username>`                                                                     | **DM only:** request an existing bot import; always requires approval |
 | `!list`                                                                                              | List bots you own                                                     |
 | `!info <username>`                                                                                   | Details on a bot you own                                              |
 | `!update <username> [--username "..."] [--display-name "..."] [--description "..."]`                 | Update attributes                                                     |
 | `!delete <username>`                                                                                 | Disable the bot in Mattermost and mark it deleted here                |
 | `!token create <username> [--description "..."]`                                                     | **DM only:** mint and deliver an access token in that DM               |
-| `!token list <username>`                                                                             | List active token IDs for a bot you own                               |
+| `!token list <username>`                                                                             | List active token IDs tracked by this manager                        |
 | `!token revoke <token_id>`                                                                           | Revoke a token you minted                                             |
-| `!approve <id>`                                                                                      | (Approvers only) Approve a pending `create` request                   |
-| `!deny <id> [reason]`                                                                                | (Approvers only) Deny a pending `create` request                      |
+| `!approve <id>`                                                                                      | (Approvers only) Approve a pending creation or import request         |
+| `!deny <id> [reason]`                                                                                | (Approvers only) Deny a pending creation or import request            |
+
+## Importing existing bots
+
+In a DM, send `!import legacy-integration` (legacy names need no `-bot` suffix).
+The requester becomes the proposed **local** owner. A configured `MM_APPROVERS`
+user reviews the bot ID, current remote owner and proposed local owner, then sends
+`!approve <request_id>` in a DM, or `!deny <request_id> [reason]`.
+With no approvers configured, imports are disabled even though creation can be immediate.
+
+Approval grants the local owner access to `!update`, `!delete` and `!token create`.
+Import itself only reads Mattermost and registers the binding in a local transaction:
+it does not rename, reassign, disable, create, or modify remote tokens. The original
+remote owner stays unchanged. Old token values cannot be recovered; existing tokens
+remain outside this manager's token registry. `!token list` reports only tracked tokens.
+
+The manager revalidates the immutable bot ID and active human owners at approval.
+Disabled accounts, plugin-owned bots, system/protected bots, elevated bot roles and
+the manager itself are excluded. A changed username or remote owner requires denial
+and a fresh request. An existing binding to the same local owner is a no-op;
+another owner's binding or a locally deleted record requires a separate explicit
+transfer/recovery procedure. `!info` shows import time, submitter and approver IDs.
+
+### Bulk import CLI
+
+Use the manager's environment and database. Prepare UTF-8 CSV with immutable
+Mattermost user IDs (26 lowercase letters/digits), one explicit local human owner per bot:
+
+```csv
+bot_user_id,owner_user_id
+bbbbbbbbbbbbbbbbbbbbbbbbbb,aaaaaaaaaaaaaaaaaaaaaaaaaa
+cccccccccccccccccccccccccc,dddddddddddddddddddddddddd
+```
+
+```bash
+# Read-only preview is the default; --dry-run makes it explicit.
+uv run python -m mm_bot_manager.import_bots mapping.csv --dry-run
+
+# Stop the manager first: submission uses its exclusive instance lock.
+uv run python -m mm_bot_manager.import_bots mapping.csv --submit
+```
+
+The installed console command is `mm-bot-manager-import` with the same arguments.
+Dry-run sends only GET requests and makes no registry/schema changes. It opens an
+existing SQLite database read-only, or uses an in-memory schema if the file does not
+exist; PostgreSQL uses a read-only session and must already have an initialized schema.
+Preview can run alongside the manager and is informational: submission and approval
+revalidate state. It produces JSON with resolved names, IDs and existing local bindings.
+
+`--submit` validates the whole batch, then atomically saves pending requests (maximum
+1000 rows; duplicate bot IDs are rejected). The authenticated `MM_TOKEN` account is
+recorded as submitter; the CSV owner is the proposed beneficiary. Identical pending
+requests reuse their IDs, while conflicts require denial first. Notifications are
+best effort; JSON always includes the durable request IDs on successful submission.
+No bots are imported by this command. Restart the manager and have an approver send
+`!approve <id>` for **each** request. Batch submission is atomic; individual approvals
+are independent. There is no CLI switch that bypasses this confirmation.
+
+Startup/submission applies additive SQLite/PostgreSQL schema migrations, preserving
+existing creation requests, bots and token records. Import audit data is committed
+with the local binding and approval; failures roll back locally without remote cleanup.
 
 ## Running locally
 

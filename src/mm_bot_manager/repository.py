@@ -110,6 +110,19 @@ class BotRepo:
         ).fetchone()
         return _bot_from_row(row) if row else None
 
+    def get(self, bot_user_id: str) -> BotRecord | None:
+        """Include deleted records: imports must never resurrect or reassign them."""
+        row = self._conn.execute(
+            "SELECT * FROM bot WHERE bot_user_id = ?", (bot_user_id,)
+        ).fetchone()
+        return _bot_from_row(row) if row else None
+
+    def get_by_username(self, username: str) -> BotRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM bot WHERE username = ? AND deleted_at IS NULL", (username,)
+        ).fetchone()
+        return _bot_from_row(row) if row else None
+
     def list_by_owner(self, owner_user_id: str) -> list[BotRecord]:
         rows = self._conn.execute(
             """
@@ -168,6 +181,9 @@ class PendingRequestRecord:
     resolved_at: str | None
     resolved_by: str | None
     deny_reason: str | None
+    kind: str = "create"
+    target_bot_user_id: str | None = None
+    remote_owner_id: str | None = None
 
 
 def _pending_from_row(row: Any) -> PendingRequestRecord:
@@ -183,6 +199,9 @@ def _pending_from_row(row: Any) -> PendingRequestRecord:
         resolved_at=row["resolved_at"],
         resolved_by=row["resolved_by"],
         deny_reason=row["deny_reason"],
+        kind=row["kind"],
+        target_bot_user_id=row["target_bot_user_id"],
+        remote_owner_id=row["remote_owner_id"],
     )
 
 
@@ -199,14 +218,18 @@ class PendingRequestRepo:
         description: str | None,
         requester_user_id: str,
         requester_username: str,
+        kind: str = "create",
+        target_bot_user_id: str | None = None,
+        remote_owner_id: str | None = None,
     ) -> PendingRequestRecord:
         created_at = _now_iso()
         self._conn.execute(
             """
             INSERT INTO pending_bot_request
                 (request_id, username, display_name, description,
-                 requester_user_id, requester_username, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 requester_user_id, requester_username, created_at,
+                 kind, target_bot_user_id, remote_owner_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request_id,
@@ -216,6 +239,9 @@ class PendingRequestRepo:
                 requester_user_id,
                 requester_username,
                 created_at,
+                kind,
+                target_bot_user_id,
+                remote_owner_id,
             ),
         )
         return PendingRequestRecord(
@@ -230,6 +256,9 @@ class PendingRequestRepo:
             resolved_at=None,
             resolved_by=None,
             deny_reason=None,
+            kind=kind,
+            target_bot_user_id=target_bot_user_id,
+            remote_owner_id=remote_owner_id,
         )
 
     def get(self, request_id: str) -> PendingRequestRecord | None:

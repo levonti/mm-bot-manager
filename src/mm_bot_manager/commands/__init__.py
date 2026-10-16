@@ -5,6 +5,7 @@ from . import (
     create_bot,
     delete_bot,
     deny,
+    import_bot,
     info,
     list_bots,
     token_create,
@@ -23,6 +24,7 @@ Handler = Callable[[CommandContext, ParsedArgs], Awaitable[str]]
 REGISTRY: dict[tuple[str, ...], Handler] = {
     ("help",): help_cmd.handle,
     ("create",): create_bot.handle,
+    ("import",): import_bot.handle,
     ("list",): list_bots.handle,
     ("info",): info.handle,
     ("update",): update_bot.handle,

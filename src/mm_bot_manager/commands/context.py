@@ -15,6 +15,6 @@ class CommandContext:
     mm: MattermostClient  # admin client — bot management REST calls
     bot_mm: MattermostClient  # bot client — posting DMs and replies
     manager_user_id: str  # the bot account's own MM user_id
-    approver_ids: frozenset[str]  # empty = no approval required
+    approver_ids: frozenset[str]  # empty permits immediate creation, but forbids imports
     operation_repo: OperationRepo
     channel_type: str | None = None  # Unknown channels must never receive credentials.
