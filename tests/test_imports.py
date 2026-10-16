@@ -120,7 +120,7 @@ def approver(ctx):
 
 
 async def request_import(ctx, bot_id=BOT, owner_id=ALICE):
-    plan = await prepare_import(ctx, bot_id, owner_id)
+    plan = await prepare_import(ctx, bot_id, owner_id, "https://git.example/team/project", 2)
     return submit_imports(ctx, [plan])[0]
 
 
@@ -130,7 +130,9 @@ def table_count(ctx, table):
 
 async def test_chat_import_requires_separate_approval_and_preserves_remote_tokens(env):
     env.mm.remote_tokens["old-token"] = {"id": "old-token", "description": "existing"}
-    reply = await dispatch(env, "!import @legacy")
+    reply = await dispatch(
+        env, "!import @legacy --repo https://git.example/team/project --criticality 2"
+    )
     assert "mandatory approval" in reply
     assert table_count(env, "bot") == 0
     request = env.pending_repo.get(
@@ -163,7 +165,9 @@ async def test_chat_import_requires_separate_approval_and_preserves_remote_token
 async def test_import_and_approval_are_dm_only(env, channel):
     request = await request_import(env)
     ctx = replace(env, channel_type=channel)
-    assert "direct message" in await dispatch(ctx, "!import legacy")
+    assert "direct message" in await dispatch(
+        ctx, "!import legacy --repo https://git.example/team/project --criticality 2"
+    )
     assert "direct message" in await dispatch(approver(ctx), f"!approve {request.request_id}")
     assert env.pending_repo.get(request.request_id).status == "pending"
     assert table_count(env, "bot") == 0
@@ -172,9 +176,11 @@ async def test_import_and_approval_are_dm_only(env, channel):
 
 async def test_empty_approvers_never_enable_import(env):
     ctx = replace(env, approver_ids=frozenset())
-    assert "MM_APPROVERS" in await dispatch(ctx, "!import legacy")
+    assert "MM_APPROVERS" in await dispatch(
+        ctx, "!import legacy --repo https://git.example/team/project --criticality 2"
+    )
     with pytest.raises(ImportError, match="MM_APPROVERS"):
-        await prepare_import(ctx, BOT, ALICE)
+        await prepare_import(ctx, BOT, ALICE, "https://git.example/team/project", 2)
     with pytest.raises(ImportError, match="MM_APPROVERS"):
         submit_imports(ctx, [])
     assert table_count(env, "pending_bot_request") == 0
@@ -225,7 +231,7 @@ async def test_ineligible_import_fails_closed_without_remote_mutations(env, targ
     }[target]
     account[field] = value
     with pytest.raises((ImportError, MattermostError)):
-        await prepare_import(env, BOT, ALICE)
+        await prepare_import(env, BOT, ALICE, "https://git.example/team/project", 2)
     assert table_count(env, "pending_bot_request") == 0
     env.mm.assert_no_bot_mutations()
 
@@ -233,17 +239,21 @@ async def test_ineligible_import_fails_closed_without_remote_mutations(env, targ
 async def test_protected_names_and_manager_are_excluded(env):
     env.mm.bots[BOT]["username"] = env.mm.users[BOT]["username"] = "playbooks"
     with pytest.raises(ImportError, match="protected"):
-        await prepare_import(env, BOT, ALICE)
+        await prepare_import(env, BOT, ALICE, "https://git.example/team/project", 2)
     with pytest.raises(ImportError, match="manager"):
-        await prepare_import(replace(env, manager_user_id=BOT), BOT, ALICE)
+        await prepare_import(
+            replace(env, manager_user_id=BOT), BOT, ALICE, "https://git.example/team/project", 2
+        )
     with pytest.raises(ImportError, match="immutable"):
-        await prepare_import(env, "../../users", ALICE)
+        await prepare_import(env, "../../users", ALICE, "https://git.example/team/project", 2)
 
 
 @pytest.mark.parametrize("status", [403, 404, 500])
 async def test_server_validation_errors_do_not_create_requests(env, status):
     env.mm.raise_on["get_bot"] = MattermostError(status, "unavailable")
-    assert "Could not request import" in await dispatch(env, "!import legacy")
+    assert "Could not request import" in await dispatch(
+        env, "!import legacy --repo https://git.example/team/project --criticality 2"
+    )
     assert table_count(env, "pending_bot_request") == 0
     env.mm.assert_no_bot_mutations()
 
@@ -273,19 +283,21 @@ async def test_idempotent_submission_and_reimport_preserve_original_audit(env):
     assert table_count(env, "pending_bot_request") == 1
     await approve_import(approver(env), request)
     audit = dict(env.bot_repo.conn.execute("SELECT * FROM bot_import").fetchone())
-    assert "already managed" in await dispatch(env, "!import legacy")
+    assert "already managed" in await dispatch(
+        env, "!import legacy --repo https://git.example/team/project --criticality 2"
+    )
     assert dict(env.bot_repo.conn.execute("SELECT * FROM bot_import").fetchone()) == audit
     with pytest.raises(ImportError, match="another owner"):
-        await prepare_import(env, BOT, BOB)
+        await prepare_import(env, BOT, BOB, "https://git.example/team/project", 2)
     env.bot_repo.mark_deleted(BOT)
     with pytest.raises(ImportError, match="removed locally"):
-        await prepare_import(env, BOT, ALICE)
+        await prepare_import(env, BOT, ALICE, "https://git.example/team/project", 2)
     env.mm.assert_no_bot_mutations()
 
 
 async def test_pending_conflicts_require_denial_before_replacement(env):
     request = await request_import(env)
-    plan = await prepare_import(env, BOT, BOB)
+    plan = await prepare_import(env, BOT, BOB, "https://git.example/team/project", 2)
     with pytest.raises(ImportError, match="conflicting"):
         submit_imports(env, [plan])
     reply = await dispatch(approver(env), f"!deny {request.request_id} wrong owner")
@@ -357,7 +369,10 @@ async def test_missing_audit_and_unknown_request_kind_never_create_remote_bot(en
 
 
 async def test_bulk_dry_run_and_atomic_submission(env):
-    rows = [(BOT, ALICE), (BOT2, BOB)]
+    rows = [
+        (BOT, ALICE, "https://git.example/team/project", 2),
+        (BOT2, BOB, "https://git.example/team/project", 2),
+    ]
     plans, ids = await process_mapping(env, rows, submit=False)
     assert len(plans) == 2 and not ids
     assert table_count(env, "pending_bot_request") == table_count(env, "bot") == 0
@@ -382,7 +397,14 @@ async def test_bulk_dry_run_and_atomic_submission(env):
 async def test_bulk_invalid_last_row_leaves_no_partial_requests_or_notifications(env):
     env.mm.users[BOT2]["delete_at"] = 1
     with pytest.raises(ImportError):
-        await process_mapping(env, [(BOT, ALICE), (BOT2, BOB)], submit=True)
+        await process_mapping(
+            env,
+            [
+                (BOT, ALICE, "https://git.example/team/project", 2),
+                (BOT2, BOB, "https://git.example/team/project", 2),
+            ],
+            submit=True,
+        )
     assert table_count(env, "pending_bot_request") == 0
     assert not env.mm.posts
     env.mm.assert_no_bot_mutations()
@@ -390,7 +412,10 @@ async def test_bulk_invalid_last_row_leaves_no_partial_requests_or_notifications
 
 async def test_bulk_transaction_rolls_back_earlier_rows_on_conflict(env):
     await request_import(env, BOT2, ALICE)
-    plans = [await prepare_import(env, BOT, ALICE), await prepare_import(env, BOT2, BOB)]
+    plans = [
+        await prepare_import(env, BOT, ALICE, "https://git.example/team/project", 2),
+        await prepare_import(env, BOT2, BOB, "https://git.example/team/project", 2),
+    ]
     with pytest.raises(ImportError, match="conflicting"):
         submit_imports(env, plans)
     assert table_count(env, "pending_bot_request") == table_count(env, "import_submission") == 1
@@ -401,12 +426,12 @@ async def test_bulk_transaction_rolls_back_earlier_rows_on_conflict(env):
     "contents",
     [
         "bot,owner\nfoo,bar\n",
-        "bot_user_id,owner_user_id\n",
-        "bot_user_id,owner_user_id\nfoo\n",
-        "bot_user_id,owner_user_id\nfoo,bar,extra\n",
-        "bot_user_id,owner_user_id\nfoo,\n",
-        "bot_user_id,owner_user_id\nfoo,bar\nfoo,other\n",
-        'bot_user_id,owner_user_id\n"unterminated',
+        "bot_user_id,owner_user_id,git_repository,criticality\n",
+        "bot_user_id,owner_user_id,git_repository,criticality\nfoo\n",
+        "bot_user_id,owner_user_id,git_repository,criticality\nfoo,bar,extra\n",
+        "bot_user_id,owner_user_id,git_repository,criticality\nfoo,\n",
+        "bot_user_id,owner_user_id,git_repository,criticality\nfoo,bar\nfoo,other\n",
+        'bot_user_id,owner_user_id,git_repository,criticality\n"unterminated',
     ],
 )
 def test_bulk_csv_rejects_malformed_or_ambiguous_rows(tmp_path, contents):
@@ -420,9 +445,14 @@ def test_bulk_csv_rejects_malformed_or_ambiguous_rows(tmp_path, contents):
 
 def test_bulk_csv_accepts_bom_and_rejects_excessive_batch(tmp_path):
     path = tmp_path / "mapping.csv"
-    path.write_text(f"\ufeffbot_user_id,owner_user_id\n{BOT},{ALICE}\n")
-    assert read_mapping(path) == [(BOT, ALICE)]
-    path.write_text("bot_user_id,owner_user_id\n" + "".join(f"b{i},a\n" for i in range(1001)))
+    path.write_text(
+        f"\ufeffbot_user_id,owner_user_id,git_repository,criticality\n{BOT},{ALICE},https://git.example/team/project,2\n"
+    )
+    assert read_mapping(path) == [(BOT, ALICE, "https://git.example/team/project", 2)]
+    path.write_text(
+        "bot_user_id,owner_user_id,git_repository,criticality\n"
+        + "".join(f"b{i},a,https://git.example/team/project,2\n" for i in range(1001))
+    )
     with pytest.raises(ImportError, match="1000"):
         read_mapping(path)
 
@@ -469,7 +499,9 @@ async def test_cli_default_dry_run_uses_get_only_and_does_not_create_or_change_d
         conn.close()
         before = path.read_bytes()
     csv_path = tmp_path / "mapping.csv"
-    csv_path.write_text(f"bot_user_id,owner_user_id\n{BOT},{ALICE}\n")
+    csv_path.write_text(
+        f"bot_user_id,owner_user_id,git_repository,criticality\n{BOT},{ALICE},https://git.example/team/project,2\n"
+    )
     route = mock_read_api(ImportMM())
     assert await run_import(settings, csv_path) == 0
     output = json.loads(capsys.readouterr().out)
@@ -488,7 +520,9 @@ async def test_cli_submit_creates_only_pending_requests_and_is_recoverable_on_no
 ):
     path = tmp_path / "registry.sqlite"
     csv_path = tmp_path / "mapping.csv"
-    csv_path.write_text(f"bot_user_id,owner_user_id\n{BOT},{BOB}\n")
+    csv_path.write_text(
+        f"bot_user_id,owner_user_id,git_repository,criticality\n{BOT},{BOB},https://git.example/team/project,2\n"
+    )
     mock_read_api(ImportMM())
     notify = respx.post("https://mm.example/api/v4/channels/direct").mock(
         return_value=httpx.Response(503, json={"message": "unavailable"})
@@ -510,6 +544,9 @@ async def test_cli_submit_creates_only_pending_requests_and_is_recoverable_on_no
 
 def assert_legacy_upgrade(conn):
     # Simulate an existing installation with preserved bots, tokens and creation requests.
+    for name in ("insert", "update"):
+        suffix = "" if conn.dialect == "sqlite" else " ON pending_bot_request"
+        conn.execute(f"DROP TRIGGER require_pending_bot_request_metadata_{name}{suffix}")
     for name in ("kind", "target_bot_user_id", "remote_owner_id"):
         conn.execute(f"ALTER TABLE pending_bot_request DROP COLUMN {name}")
     conn.execute(
@@ -523,6 +560,8 @@ def assert_legacy_upgrade(conn):
         description=None,
         owner_user_id="alice",
         owner_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     TokenRepo(conn).record(token_id="old-token", bot_user_id="old-bot", description="existing")
     init_schema(conn)
@@ -550,9 +589,11 @@ async def test_import_cannot_reuse_conflicting_local_username(env):
         description=None,
         owner_user_id=BOB,
         owner_username="bob",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     with pytest.raises(ImportError, match="different local bot ID"):
-        await prepare_import(env, BOT, ALICE)
+        await prepare_import(env, BOT, ALICE, "https://git.example/team/project", 2)
     env.mm.assert_no_bot_mutations()
 
 
@@ -565,7 +606,7 @@ async def test_import_refuses_stale_local_name_and_unauthorised_service_approval
     await approve_import(approver(env), request)
     env.bot_repo.patch(BOT, username="old-name")
     with pytest.raises(ImportError, match="local username differs"):
-        await prepare_import(env, BOT, ALICE)
+        await prepare_import(env, BOT, ALICE, "https://git.example/team/project", 2)
 
 
 async def test_repeated_approval_handles_same_owner_binding_without_replacing_audit(env):
@@ -577,6 +618,8 @@ async def test_repeated_approval_handles_same_owner_binding_without_replacing_au
         description=None,
         owner_user_id=ALICE,
         owner_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     await approve_import(approver(env), request)
     assert env.pending_repo.get(request.request_id).status == "approved"
@@ -585,10 +628,14 @@ async def test_repeated_approval_handles_same_owner_binding_without_replacing_au
 
 
 async def test_empty_approvers_and_username_lookup_errors_reject_cli_and_chat(env, tmp_path):
-    assert "Could not request import" in await dispatch(env, "!import absent")
+    assert "Could not request import" in await dispatch(
+        env, "!import absent --repo https://git.example/team/project --criticality 2"
+    )
     settings = settings_for(tmp_path / "registry.sqlite").model_copy(update={"mm_approvers": ""})
     csv_path = tmp_path / "mapping.csv"
-    csv_path.write_text(f"bot_user_id,owner_user_id\n{BOT},{ALICE}\n")
+    csv_path.write_text(
+        f"bot_user_id,owner_user_id,git_repository,criticality\n{BOT},{ALICE},https://git.example/team/project,2\n"
+    )
     with respx.mock, pytest.raises(ImportError, match="MM_APPROVERS"):
         await run_import(settings, csv_path)
     assert not (tmp_path / "registry.sqlite").exists()

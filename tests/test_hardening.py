@@ -67,7 +67,9 @@ def event(post_id="post-1", *, channel_type="D", message="!token create demo-bot
 
 
 async def create_bot(m):
-    reply = await dispatch(m.ctx, "!create demo-bot")
+    reply = await dispatch(
+        m.ctx, "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     assert "Created bot" in reply
 
 
@@ -142,7 +144,9 @@ async def test_bot_db_failure_disables_remote_bot(manager):
         "CREATE TRIGGER fail_bot BEFORE INSERT ON bot "
         "BEGIN SELECT RAISE(ABORT, 'disk write failed'); END"
     )
-    reply = await dispatch(m.ctx, "!create demo-bot")
+    reply = await dispatch(
+        m.ctx, "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     assert "not completed" in reply
     assert m.mm.disabled == ["bot-0"]
     assert m.ctx.bot_repo.list_by_owner("alice") == []
@@ -170,7 +174,9 @@ async def test_failure_saving_remote_id_still_compensates(manager):
         "WHEN NEW.status = 'remote_created' "
         "BEGIN SELECT RAISE(ABORT, 'write failed'); END"
     )
-    await dispatch(m.ctx, "!create demo-bot")
+    await dispatch(
+        m.ctx, "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     assert m.mm.disabled == ["bot-0"]
     assert m.ctx.operation_repo.unfinished() == []
 
@@ -211,7 +217,9 @@ async def test_failed_bot_compensation_survives_reconnection(manager):
         "BEGIN SELECT RAISE(ABORT, 'write failed'); END"
     )
     m.mm.raise_on["disable_bot"] = MattermostError(503, "unavailable")
-    await dispatch(m.ctx, "!create demo-bot")
+    await dispatch(
+        m.ctx, "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     assert m.ctx.operation_repo.unfinished()[0].remote_id == "bot-0"
     second_conn = connect(m.path)
     try:
@@ -262,9 +270,13 @@ async def test_unknown_bot_outcome_is_blocked_and_never_adopted_by_name(manager,
         raise httpx.ReadTimeout("response lost")
 
     monkeypatch.setattr(m.mm, "create_bot", create_then_timeout)
-    await dispatch(m.ctx, "!create demo-bot")
+    await dispatch(
+        m.ctx, "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     assert await recover_operations(m.ctx) == 1
-    reply = await dispatch(m.ctx, "!create demo-bot")
+    reply = await dispatch(
+        m.ctx, "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     assert "operator review" in reply
     assert len(m.mm.created) == 1
     assert not m.mm.disabled
@@ -290,6 +302,8 @@ async def test_approve_excludes_concurrent_deny_and_second_approve(manager, monk
         description=None,
         requester_user_id="alice",
         requester_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     approver = replace(
         m.ctx,
@@ -330,6 +344,8 @@ async def test_denied_request_cannot_be_approved(manager):
         description=None,
         requester_user_id="alice",
         requester_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     approver = replace(m.ctx, caller_user_id="approver-a", approver_ids=frozenset({"approver-a"}))
     assert "Denied" in await dispatch(approver, "!deny req")
@@ -346,6 +362,8 @@ async def test_approval_finalization_and_ownership_are_one_transaction(manager):
         description=None,
         requester_user_id="alice",
         requester_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     m.conn.execute(
         "CREATE TRIGGER fail_approval BEFORE UPDATE ON pending_bot_request "

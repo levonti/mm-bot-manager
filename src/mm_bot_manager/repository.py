@@ -4,6 +4,7 @@ from typing import Any
 from uuid import uuid4
 
 from .db import DbConn
+from .metadata import BotMetadata, MetadataError, validate_metadata
 
 
 def _now_iso() -> str:
@@ -20,6 +21,8 @@ class BotRecord:
     owner_username: str
     created_at: str
     deleted_at: str | None
+    git_repository: str | None = None
+    criticality: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +44,8 @@ def _bot_from_row(row: Any) -> BotRecord:
         owner_username=row["owner_username"],
         created_at=row["created_at"],
         deleted_at=row["deleted_at"],
+        git_repository=row["git_repository"],
+        criticality=row["criticality"],
     )
 
 
@@ -71,13 +76,16 @@ class BotRepo:
         description: str | None,
         owner_user_id: str,
         owner_username: str,
+        git_repository: str,
+        criticality: int,
     ) -> BotRecord:
+        metadata = validate_metadata(git_repository, criticality)
         created_at = _now_iso()
         self._conn.execute(
             """
             INSERT INTO bot (bot_user_id, username, display_name, description,
-                             owner_user_id, owner_username, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                             owner_user_id, owner_username, created_at, git_repository, criticality)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 bot_user_id,
@@ -87,6 +95,8 @@ class BotRepo:
                 owner_user_id,
                 owner_username,
                 created_at,
+                metadata.git_repository,
+                metadata.criticality,
             ),
         )
         return BotRecord(
@@ -98,6 +108,8 @@ class BotRepo:
             owner_username=owner_username,
             created_at=created_at,
             deleted_at=None,
+            git_repository=metadata.git_repository,
+            criticality=metadata.criticality,
         )
 
     def get_by_owner_and_username(self, owner_user_id: str, username: str) -> BotRecord | None:
@@ -184,6 +196,8 @@ class PendingRequestRecord:
     kind: str = "create"
     target_bot_user_id: str | None = None
     remote_owner_id: str | None = None
+    git_repository: str | None = None
+    criticality: int | None = None
 
 
 def _pending_from_row(row: Any) -> PendingRequestRecord:
@@ -202,6 +216,8 @@ def _pending_from_row(row: Any) -> PendingRequestRecord:
         kind=row["kind"],
         target_bot_user_id=row["target_bot_user_id"],
         remote_owner_id=row["remote_owner_id"],
+        git_repository=row["git_repository"],
+        criticality=row["criticality"],
     )
 
 
@@ -218,18 +234,21 @@ class PendingRequestRepo:
         description: str | None,
         requester_user_id: str,
         requester_username: str,
+        git_repository: str,
+        criticality: int,
         kind: str = "create",
         target_bot_user_id: str | None = None,
         remote_owner_id: str | None = None,
     ) -> PendingRequestRecord:
+        metadata = validate_metadata(git_repository, criticality)
         created_at = _now_iso()
         self._conn.execute(
             """
             INSERT INTO pending_bot_request
                 (request_id, username, display_name, description,
                  requester_user_id, requester_username, created_at,
-                 kind, target_bot_user_id, remote_owner_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 kind, target_bot_user_id, remote_owner_id, git_repository, criticality)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request_id,
@@ -242,6 +261,8 @@ class PendingRequestRepo:
                 kind,
                 target_bot_user_id,
                 remote_owner_id,
+                metadata.git_repository,
+                metadata.criticality,
             ),
         )
         return PendingRequestRecord(
@@ -259,6 +280,8 @@ class PendingRequestRepo:
             kind=kind,
             target_bot_user_id=target_bot_user_id,
             remote_owner_id=remote_owner_id,
+            git_repository=metadata.git_repository,
+            criticality=metadata.criticality,
         )
 
     def get(self, request_id: str) -> PendingRequestRecord | None:
@@ -426,3 +449,127 @@ class PostRepo:
             (_now_iso(),),
         )
         return int(cursor.rowcount)
+
+
+class MetadataRepo:
+    def __init__(self, conn: DbConn) -> None:
+        self.conn = conn
+
+    def set(
+        self,
+        record_type: str,
+        record_id: str,
+        metadata: BotMetadata,
+        *,
+        actor: str,
+        source: str,
+        only_missing: bool = False,
+    ) -> None:
+        """Call inside a transaction so data and audit cannot diverge."""
+        if record_type not in {"bot", "request"}:
+            raise MetadataError("Record type must be bot or request.")
+        table, key = (
+            ("bot", "bot_user_id")
+            if record_type == "bot"
+            else ("pending_bot_request", "request_id")
+        )
+        row = self.conn.execute(f"SELECT * FROM {table} WHERE {key} = ?", (record_id,)).fetchone()
+        if row is None:
+            raise MetadataError("Registry record not found.")
+        if record_type == "request" and row["status"] != "pending":
+            raise MetadataError("Only pending legacy requests may be backfilled.")
+        old_repo, old_criticality = row["git_repository"], row["criticality"]
+        if (old_repo, old_criticality) == (metadata.git_repository, metadata.criticality):
+            return
+        if only_missing and old_repo is not None and old_criticality is not None:
+            raise MetadataError("Backfill cannot replace existing metadata; use an audited update.")
+        self.conn.execute(
+            f"UPDATE {table} SET git_repository = ?, criticality = ? WHERE {key} = ?",
+            (metadata.git_repository, metadata.criticality, record_id),
+        )
+        self.conn.execute(
+            "INSERT INTO metadata_audit (audit_id, record_type, record_id, old_git_repository, "
+            "old_criticality, git_repository, criticality, changed_by, source, changed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                uuid4().hex,
+                record_type,
+                record_id,
+                old_repo,
+                old_criticality,
+                metadata.git_repository,
+                metadata.criticality,
+                actor,
+                source,
+                _now_iso(),
+            ),
+        )
+
+    def missing(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for table, key, kind, condition in (
+            ("bot", "bot_user_id", "bot", "1 = 1"),
+            ("pending_bot_request", "request_id", "request", "status = 'pending'"),
+        ):
+            # SELECT * supports read-only inspection before additive schema migration.
+            for raw in self.conn.execute(f"SELECT * FROM {table} WHERE {condition} ORDER BY {key}"):
+                row = dict(raw)
+                if row.get("git_repository") is not None and row.get("criticality") is not None:
+                    continue
+                records.append(
+                    {
+                        "record_type": kind,
+                        "record_id": row[key],
+                        "git_repository": row.get("git_repository"),
+                        "criticality": row.get("criticality"),
+                    }
+                )
+        return records
+
+
+class CatalogRepo:
+    def __init__(self, conn: DbConn) -> None:
+        self.conn = conn
+
+    def page(
+        self,
+        *,
+        criticality: int | None = None,
+        owner: str | None = None,
+        search: str | None = None,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> tuple[list[dict[str, Any]], int]:
+        conditions = ["b.deleted_at IS NULL"]
+        params: list[Any] = []
+        if criticality is not None:
+            conditions.append("b.criticality = ?")
+            params.append(criticality)
+        if owner is not None:
+            conditions.append("b.owner_username = ?")
+            params.append(owner)
+        if search is not None:
+            # Literal, case-insensitive search; '%' and '_' are not wildcards.
+            conditions.append(
+                "(LOWER(b.username) LIKE ? ESCAPE '!' OR "
+                "LOWER(COALESCE(b.description, '')) LIKE ? ESCAPE '!' OR "
+                "LOWER(COALESCE(b.git_repository, '')) LIKE ? ESCAPE '!')"
+            )
+            pattern = (
+                "%" + search.lower().replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+            )
+            params.extend([pattern] * 3)
+        where = " AND ".join(conditions)
+        total = self.conn.execute(
+            f"SELECT COUNT(*) AS n FROM bot b WHERE {where}", params
+        ).fetchone()["n"]
+        rows = self.conn.execute(
+            "SELECT b.*, CASE WHEN i.bot_user_id IS NULL "
+            "THEN 'created' ELSE 'imported' END AS source "
+            "FROM bot b LEFT JOIN bot_import i ON i.bot_user_id = b.bot_user_id "
+            f"WHERE {where} ORDER BY "
+            "CASE WHEN b.criticality IS NULL THEN 4 ELSE b.criticality END, "
+            "b.username, b.bot_user_id LIMIT ? OFFSET ?",
+            [*params, page_size, (page - 1) * page_size],
+        ).fetchall()
+        return [dict(row) for row in rows], total

@@ -21,6 +21,8 @@ def test_insert_and_fetch_bot(repos):
         description="d",
         owner_user_id="owner1",
         owner_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     assert b.bot_user_id == "u1"
 
@@ -38,6 +40,8 @@ def test_ownership_isolation(repos):
         description=None,
         owner_user_id="alice-id",
         owner_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     # another user cannot see it
     assert bots.get_by_owner_and_username("bob-id", "demo") is None
@@ -54,6 +58,8 @@ def test_patch_bot(repos):
         description="old",
         owner_user_id="o",
         owner_username="o",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     bots.patch("u1", display_name="new", description="new-desc")
     fetched = bots.get_by_owner_and_username("o", "demo")
@@ -71,6 +77,8 @@ def test_soft_delete(repos):
         description=None,
         owner_user_id="o",
         owner_username="o",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     bots.mark_deleted("u1")
     assert bots.get_by_owner_and_username("o", "demo") is None
@@ -85,6 +93,8 @@ def test_token_lifecycle(repos):
         description=None,
         owner_user_id="o",
         owner_username="o",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     t = tokens.record(token_id="tok1", bot_user_id="u1", description="ci")
     assert t.token_id == "tok1"

@@ -1,6 +1,7 @@
 import re
 
 from ..imports import ImportError, notify_import, prepare_import, submit_imports
+from ..metadata import MetadataError, validate_metadata
 from ..mm_client import MattermostError
 from .context import CommandContext
 from .parser import ParsedArgs
@@ -9,8 +10,8 @@ from .parser import ParsedArgs
 async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     if ctx.channel_type != "D":
         return "Import requests are only accepted in a direct message to this manager."
-    if len(args.positional) != 1 or args.flags:
-        return "Usage: `!import <existing-bot-username>` (in a direct message)"
+    if len(args.positional) != 1 or args.flags.keys() - {"repo", "criticality"}:
+        return "Usage: `!import <username> --repo <url> --criticality <1|2|3>` (in DM)"
     if not ctx.approver_ids:
         return "Import requires configured MM_APPROVERS and explicit approval."
     username = args.positional[0].removeprefix("@")
@@ -18,12 +19,15 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", username):
         return "Invalid bot username."
     try:
+        metadata = validate_metadata(args.take_flag("repo"), args.take_flag("criticality"))
         user = await ctx.mm.get_user_by_username(username)
-        plan = await prepare_import(ctx, user["id"], ctx.caller_user_id)
+        plan = await prepare_import(
+            ctx, user["id"], ctx.caller_user_id, metadata.git_repository, metadata.criticality
+        )
         if plan.username != username:
             raise ImportError("The remote username changed; submit a new request.")
         requests = submit_imports(ctx, [plan])
-    except (ImportError, MattermostError) as exc:
+    except (ImportError, MetadataError, MattermostError) as exc:
         return f"Could not request import: {exc}"
     if not requests:
         return f"Bot `@{username}` is already managed by you."

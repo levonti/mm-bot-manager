@@ -2,6 +2,7 @@ from collections.abc import Awaitable, Callable
 
 from . import (
     approve,
+    catalog,
     create_bot,
     delete_bot,
     deny,
@@ -26,6 +27,7 @@ REGISTRY: dict[tuple[str, ...], Handler] = {
     ("create",): create_bot.handle,
     ("import",): import_bot.handle,
     ("list",): list_bots.handle,
+    ("catalog",): catalog.handle,
     ("info",): info.handle,
     ("update",): update_bot.handle,
     ("delete",): delete_bot.handle,

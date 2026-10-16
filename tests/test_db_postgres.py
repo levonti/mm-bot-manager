@@ -72,6 +72,8 @@ def test_insert_and_fetch_bot(repos):
         description="d",
         owner_user_id="owner1",
         owner_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     assert b.bot_user_id == "u1"
 
@@ -89,6 +91,8 @@ def test_ownership_isolation(repos):
         description=None,
         owner_user_id="alice-id",
         owner_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     assert bots.get_by_owner_and_username("bob-id", "demo") is None
     assert bots.list_by_owner("bob-id") == []
@@ -104,6 +108,8 @@ def test_patch_bot(repos):
         description="old",
         owner_user_id="o",
         owner_username="o",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     bots.patch("u1", display_name="new", description="new-desc")
     fetched = bots.get_by_owner_and_username("o", "demo")
@@ -121,6 +127,8 @@ def test_soft_delete(repos):
         description=None,
         owner_user_id="o",
         owner_username="o",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     bots.mark_deleted("u1")
     assert bots.get_by_owner_and_username("o", "demo") is None
@@ -138,6 +146,8 @@ def test_token_lifecycle(repos):
         description=None,
         owner_user_id="o",
         owner_username="o",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     t = tokens.record(token_id="tok1", bot_user_id="u1", description="ci")
     assert t.token_id == "tok1"
@@ -162,6 +172,8 @@ def test_pending_request_lifecycle(repos):
         description="desc",
         requester_user_id="user1",
         requester_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     assert r.status == "pending"
 
@@ -186,6 +198,8 @@ def test_pending_request_deny_with_reason(repos):
         description=None,
         requester_user_id="user1",
         requester_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     pending.resolve("req1", status="denied", resolved_by="approver1", deny_reason="policy")
     r = pending.get("req1")
@@ -245,6 +259,8 @@ def test_approval_claim_is_atomic_across_postgres_connections(isolated_pg, pg_ds
         description=None,
         requester_user_id="alice",
         requester_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     results = parallel_connections(
         pg_dsn, schema, lambda c: PendingRequestRepo(c).claim("req", "a")
@@ -287,7 +303,7 @@ async def test_postgres_compensation_and_restart_recovery(isolated_pg, monkeypat
         operation_repo=OperationRepo(conn),
         channel_type="D",
     )
-    await dispatch(ctx, "!create demo-bot")
+    await dispatch(ctx, "!create demo-bot --repo https://git.example/team/project --criticality 2")
     original = ctx.token_repo.record
 
     def failing_record(**kwargs):
@@ -328,6 +344,8 @@ async def test_postgres_approval_failure_rolls_back_ownership(isolated_pg, monke
         description=None,
         requester_user_id="alice",
         requester_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     resolve = ctx.pending_repo.resolve
 
@@ -396,10 +414,58 @@ async def test_postgres_bulk_preview_cannot_write(isolated_pg, pg_dsn):
         conn.execute(f'SET search_path TO "{schema}"')
         conn.execute("SET default_transaction_read_only = on")
         ctx = import_context(conn)
-        plans, ids = await process_mapping(ctx, [(BOT, ALICE)], submit=False)
+        plans, ids = await process_mapping(
+            ctx, [(BOT, ALICE, "https://git.example/team/project", 2)], submit=False
+        )
         assert len(plans) == 1 and not ids
         with pytest.raises(Exception, match="read-only"):
             conn.execute("DELETE FROM bot")
         ctx.mm.assert_no_bot_mutations()
     finally:
         conn.close()
+
+
+def test_postgres_inventory_constraints_prevent_sql_bypass(isolated_pg):
+    from tests.test_registry import assert_constraints
+
+    conn, _ = isolated_pg
+    assert_constraints(conn)
+
+
+def test_postgres_legacy_backfill_is_atomic_and_audited(isolated_pg, monkeypatch):
+    from tests.test_registry import assert_backfill
+
+    conn, _ = isolated_pg
+    assert_backfill(conn, monkeypatch)
+
+
+async def test_postgres_catalog_filters_and_literal_wildcards(isolated_pg):
+    from tests.test_imports import approver, import_context
+    from tests.test_registry import seed
+
+    conn, _ = isolated_pg
+    ctx = import_context(conn)
+    seed(ctx, criticality=1, description="SQL_100% literal")
+    seed(ctx, 1, criticality=2, description="another")
+    assert "1 matching bots" in await dispatch(approver(ctx), "!catalog --search 100%")
+    assert "1 matching bots" in await dispatch(
+        approver(ctx), "!catalog --criticality 2 --owner alice"
+    )
+    assert "0 matching bots" in await dispatch(approver(ctx), "!catalog --search invalid")
+
+
+def test_postgres_backfill_preview_accepts_old_schema_in_read_only_session(isolated_pg, pg_dsn):
+    from mm_bot_manager.metadata_migration import preview_backfill
+    from tests.test_registry import backfill_rows, make_legacy
+
+    conn, schema = isolated_pg
+    make_legacy(conn)
+    preview = connect_postgres(pg_dsn)
+    try:
+        preview.execute(f'SET search_path TO "{schema}"')
+        preview.execute("SET default_transaction_read_only = on")
+        assert preview_backfill(preview, backfill_rows()) == 0
+        with pytest.raises(Exception, match="read-only"):
+            preview.execute("UPDATE bot SET username = 'changed'")
+    finally:
+        preview.close()

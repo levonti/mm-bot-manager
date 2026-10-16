@@ -51,6 +51,7 @@
       "properties": {
         "url": { "type": "string", "format": "uri", "minLength": 1 },
         "approvers": { "type": "string" },
+        "catalogViewers": { "type": "string" },
         "verifySSL": { "type": "boolean" }
       }
     },

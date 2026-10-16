@@ -18,3 +18,4 @@ class CommandContext:
     approver_ids: frozenset[str]  # empty permits immediate creation, but forbids imports
     operation_repo: OperationRepo
     channel_type: str | None = None  # Unknown channels must never receive credentials.
+    catalog_viewer_ids: frozenset[str] = frozenset()

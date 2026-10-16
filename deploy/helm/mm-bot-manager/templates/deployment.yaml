@@ -54,6 +54,11 @@ spec:
                 configMapKeyRef:
                   name: {{ include "mm-bot-manager.fullname" . }}
                   key: MM_APPROVERS
+            - name: MM_CATALOG_VIEWERS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mm-bot-manager.fullname" . }}
+                  key: MM_CATALOG_VIEWERS
             - name: MM_VERIFY_SSL
               valueFrom:
                 configMapKeyRef:

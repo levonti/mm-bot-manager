@@ -35,6 +35,8 @@ def test_acknowledging_reviewed_absence_releases_request(db):
         description=None,
         requester_user_id="alice",
         requester_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     assert pending.claim("req", "approver")
     repo = OperationRepo(db)

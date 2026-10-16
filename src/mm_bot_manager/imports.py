@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from .db import transaction
+from .metadata import validate_metadata
 from .repository import BotRecord, PendingRequestRecord, _now_iso
 
 if TYPE_CHECKING:
@@ -28,6 +29,8 @@ class ImportPlan:
     remote_owner_id: str
     owner_user_id: str
     owner_username: str
+    git_repository: str
+    criticality: int
 
 
 def _id(value: str) -> str:
@@ -47,15 +50,27 @@ def check_local(ctx: CommandContext, plan: ImportPlan) -> BotRecord | None:
             )
         if existing.username != plan.username:
             raise ImportError("The local username differs; reconcile the existing record first.")
+        if (existing.git_repository, existing.criticality) != (
+            plan.git_repository,
+            plan.criticality,
+        ):
+            raise ImportError("Local metadata differs; use an audited update or legacy backfill.")
     named = ctx.bot_repo.get_by_username(plan.username)
     if named is not None and named.bot_user_id != plan.bot_user_id:
         raise ImportError("This username is already bound to a different local bot ID.")
     return existing
 
 
-async def prepare_import(ctx: CommandContext, bot_user_id: str, owner_user_id: str) -> ImportPlan:
+async def prepare_import(
+    ctx: CommandContext,
+    bot_user_id: str,
+    owner_user_id: str,
+    git_repository: str,
+    criticality: int | str,
+) -> ImportPlan:
     if not ctx.approver_ids:
         raise ImportError("Import requires configured MM_APPROVERS and explicit approval.")
+    metadata = validate_metadata(git_repository, criticality)
     _id(bot_user_id)
     _id(owner_user_id)
     if bot_user_id == ctx.manager_user_id:
@@ -102,6 +117,8 @@ async def prepare_import(ctx: CommandContext, bot_user_id: str, owner_user_id: s
         remote_owner_id=remote_owner_id,
         owner_user_id=owner_user_id,
         owner_username=owner["username"],
+        git_repository=metadata.git_repository,
+        criticality=metadata.criticality,
     )
     check_local(ctx, plan)
     return plan
@@ -117,7 +134,8 @@ def submit_imports(ctx: CommandContext, plans: list[ImportPlan]) -> list[Pending
             if check_local(ctx, plan) is not None:
                 continue  # Same owner: an idempotent no-op, with original provenance intact.
             row = ctx.bot_repo.conn.execute(
-                "SELECT request_id, requester_user_id, username, remote_owner_id "
+                "SELECT request_id, requester_user_id, username, remote_owner_id, "
+                "git_repository, criticality "
                 "FROM pending_bot_request WHERE kind = 'import' "
                 "AND target_bot_user_id = ? AND status = 'pending'",
                 (plan.bot_user_id,),
@@ -127,6 +145,8 @@ def submit_imports(ctx: CommandContext, plans: list[ImportPlan]) -> list[Pending
                     row["requester_user_id"] != plan.owner_user_id
                     or row["username"] != plan.username
                     or row["remote_owner_id"] != plan.remote_owner_id
+                    or row["git_repository"] != plan.git_repository
+                    or row["criticality"] != plan.criticality
                 ):
                     raise ImportError("A conflicting import request is pending; deny it first.")
                 existing = ctx.pending_repo.get(row["request_id"])
@@ -143,6 +163,8 @@ def submit_imports(ctx: CommandContext, plans: list[ImportPlan]) -> list[Pending
                 kind="import",
                 target_bot_user_id=plan.bot_user_id,
                 remote_owner_id=plan.remote_owner_id,
+                git_repository=plan.git_repository,
+                criticality=plan.criticality,
             )
             ctx.bot_repo.conn.execute(
                 "INSERT INTO import_submission (request_id, submitted_by) VALUES (?, ?)",
@@ -159,7 +181,14 @@ async def approve_import(ctx: CommandContext, request: PendingRequestRecord) -> 
         raise ImportError("Only configured approvers may approve imports.")
     if request.kind != "import" or not request.target_bot_user_id:
         raise ImportError("Invalid import request; no bot will be created.")
-    plan = await prepare_import(ctx, request.target_bot_user_id, request.requester_user_id)
+    metadata = validate_metadata(request.git_repository, request.criticality)
+    plan = await prepare_import(
+        ctx,
+        request.target_bot_user_id,
+        request.requester_user_id,
+        metadata.git_repository,
+        metadata.criticality,
+    )
     if plan.username != request.username or plan.remote_owner_id != request.remote_owner_id:
         raise ImportError("Remote username or ownership changed; deny and submit a new request.")
     with transaction(ctx.bot_repo.conn):
@@ -176,6 +205,8 @@ async def approve_import(ctx: CommandContext, request: PendingRequestRecord) -> 
                 description=plan.description,
                 owner_user_id=plan.owner_user_id,
                 owner_username=plan.owner_username,
+                git_repository=plan.git_repository,
+                criticality=plan.criticality,
             )
             ctx.bot_repo.conn.execute(
                 "INSERT INTO bot_import (bot_user_id, request_id, imported_at, submitted_by, "
@@ -204,6 +235,8 @@ async def notify_import(ctx: CommandContext, request: PendingRequestRecord) -> N
         f"- bot: `@{request.username}` (`{request.target_bot_user_id}`)\n"
         f"- assigned owner: @{request.requester_username} (`{request.requester_user_id}`)\n"
         f"- remote owner: `{request.remote_owner_id}`\n"
+        f"- repository: {request.git_repository}\n"
+        f"- criticality: {request.criticality} (1 critical, 2 important, 3 auxiliary)\n"
         f"- submitted by: `{ctx.caller_user_id}`\n\n"
         "Approval grants bot management and token issuance. Existing tokens stay unchanged.\n"
         f"Reply `!approve {request.request_id}` or `!deny {request.request_id} [reason]`."

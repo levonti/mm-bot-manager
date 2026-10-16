@@ -158,7 +158,8 @@ async def test_create_and_list_and_info(ctx):
     make, mm, _bot_repo, _, _pr = ctx
     reply = await dispatch(
         make(),
-        '!create demo-bot --display-name "Demo Bot" --description "hi"',
+        '!create demo-bot --display-name "Demo Bot" --description "hi" '
+        "--repo https://git.example/team/project --criticality 2",
     )
     assert "Created bot" in reply
     assert mm.created == [{"username": "demo-bot", "display_name": "Demo Bot", "description": "hi"}]
@@ -179,21 +180,27 @@ async def test_create_no_args(ctx):
 
 async def test_create_bad_username_suffix(ctx):
     make, *_ = ctx
-    reply = await dispatch(make(), "!create mybot")
+    reply = await dispatch(
+        make(), "!create mybot --repo https://git.example/team/project --criticality 2"
+    )
     assert "-bot" in reply
 
 
 async def test_create_mm_error(ctx):
     make, mm, *_ = ctx
     mm.raise_on["create_bot"] = MattermostError(500, "internal error")
-    reply = await dispatch(make(), "!create demo-bot")
+    reply = await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     assert "Could not create bot" in reply
 
 
 async def test_create_mm_403(ctx):
     make, mm, *_ = ctx
     mm.raise_on["create_bot"] = MattermostError(403, "forbidden")
-    reply = await dispatch(make(), "!create demo-bot")
+    reply = await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     assert "permission denied" in reply
 
 
@@ -204,7 +211,7 @@ async def test_list_empty(ctx):
     make, *_ = ctx
     reply = await dispatch(make(), "!list")
     assert "don't own any bots" in reply
-    assert "`!create <username>`" in reply
+    assert "--repo <url> --criticality <1|2|3>" in reply
 
 
 async def test_info_no_args(ctx):
@@ -221,7 +228,10 @@ async def test_info_bot_not_found(ctx):
 
 async def test_ownership_enforced_on_info(ctx):
     make, *_ = ctx
-    await dispatch(make("alice-id", "alice"), "!create demo-bot")
+    await dispatch(
+        make("alice-id", "alice"),
+        "!create demo-bot --repo https://git.example/team/project --criticality 2",
+    )
     reply = await dispatch(make("bob-id", "bob"), "!info demo-bot")
     assert "not found or not owned by you" in reply
 
@@ -231,7 +241,9 @@ async def test_ownership_enforced_on_info(ctx):
 
 async def test_update(ctx):
     make, _mm, bot_repo, *_ = ctx
-    await dispatch(make(), "!create demo-bot")
+    await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     reply = await dispatch(make(), '!update demo-bot --description "new desc"')
     assert "Updated" in reply
     bot = bot_repo.get_by_owner_and_username("alice-id", "demo-bot")
@@ -253,14 +265,18 @@ async def test_update_bot_not_found(ctx):
 
 async def test_update_no_flags(ctx):
     make, *_ = ctx
-    await dispatch(make(), "!create demo-bot")
+    await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     reply = await dispatch(make(), "!update demo-bot")
     assert "Nothing to update" in reply
 
 
 async def test_update_mm_error(ctx):
     make, mm, *_ = ctx
-    await dispatch(make(), "!create demo-bot")
+    await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     mm.raise_on["patch_bot"] = MattermostError(500, "oops")
     reply = await dispatch(make(), '!update demo-bot --display-name "x"')
     assert "Could not update bot" in reply
@@ -271,7 +287,9 @@ async def test_update_mm_error(ctx):
 
 async def test_delete(ctx):
     make, mm, bot_repo, _, _pr = ctx
-    await dispatch(make(), "!create demo-bot")
+    await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     reply = await dispatch(make(), "!delete demo-bot")
     assert "Disabled" in reply
     assert mm.disabled == ["bot-0"]
@@ -292,7 +310,9 @@ async def test_delete_bot_not_found(ctx):
 
 async def test_delete_mm_error(ctx):
     make, mm, *_ = ctx
-    await dispatch(make(), "!create demo-bot")
+    await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     mm.raise_on["disable_bot"] = MattermostError(500, "oops")
     reply = await dispatch(make(), "!delete demo-bot")
     assert "Could not disable bot" in reply
@@ -303,7 +323,9 @@ async def test_delete_mm_error(ctx):
 
 async def test_token_create_and_revoke(ctx):
     make, mm, _, token_repo, _pr = ctx
-    await dispatch(make(), "!create demo-bot")
+    await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     reply = await dispatch(make(), '!token create demo-bot --description "e2e"')
     assert "Minted token" in reply
     assert "secret-tok-0" not in reply
@@ -331,7 +353,9 @@ async def test_token_create_bot_not_found(ctx):
 
 async def test_token_create_mm_error(ctx):
     make, mm, *_ = ctx
-    await dispatch(make(), "!create demo-bot")
+    await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     mm.raise_on["create_user_access_token"] = MattermostError(500, "oops")
     reply = await dispatch(make(), "!token create demo-bot")
     assert "Could not create token" in reply
@@ -354,14 +378,18 @@ async def test_token_list_bot_not_found(ctx):
 
 async def test_token_list_no_tokens(ctx):
     make, *_ = ctx
-    await dispatch(make(), "!create demo-bot")
+    await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     reply = await dispatch(make(), "!token list demo-bot")
     assert "no active tokens" in reply
 
 
 async def test_token_list_with_tokens(ctx):
     make, *_ = ctx
-    await dispatch(make(), "!create demo-bot")
+    await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     await dispatch(make(), '!token create demo-bot --description "ci"')
     reply = await dispatch(make(), "!token list demo-bot")
     assert "tok-0" in reply
@@ -385,7 +413,9 @@ async def test_token_revoke_not_tracked(ctx):
 
 async def test_token_revoke_already_revoked(ctx):
     make, *_ = ctx
-    await dispatch(make(), "!create demo-bot")
+    await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     await dispatch(make(), "!token create demo-bot")
     await dispatch(make(), "!token revoke tok-0")
     reply = await dispatch(make(), "!token revoke tok-0")
@@ -394,7 +424,9 @@ async def test_token_revoke_already_revoked(ctx):
 
 async def test_token_revoke_mm_error(ctx):
     make, mm, *_ = ctx
-    await dispatch(make(), "!create demo-bot")
+    await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
     await dispatch(make(), "!token create demo-bot")
     mm.raise_on["revoke_user_access_token"] = MattermostError(500, "oops")
     reply = await dispatch(make(), "!token revoke tok-0")
@@ -403,7 +435,10 @@ async def test_token_revoke_mm_error(ctx):
 
 async def test_token_revoke_rejects_foreign_owner(ctx):
     make, *_ = ctx
-    await dispatch(make("alice-id", "alice"), "!create demo-bot")
+    await dispatch(
+        make("alice-id", "alice"),
+        "!create demo-bot --repo https://git.example/team/project --criticality 2",
+    )
     await dispatch(make("alice-id", "alice"), "!token create demo-bot")
     reply = await dispatch(make("bob-id", "bob"), "!token revoke tok-0")
     assert "does not belong" in reply or "not tracked" in reply
@@ -435,7 +470,10 @@ async def test_approve_request_not_found(ctx):
 async def test_approve_already_resolved(ctx):
     make, _, _, _, pending_repo = ctx
     approvers = frozenset(["approver-id"])
-    await dispatch(make(approver_ids=approvers), "!create demo-bot")
+    await dispatch(
+        make(approver_ids=approvers),
+        "!create demo-bot --repo https://git.example/team/project --criticality 2",
+    )
     rows = pending_repo._conn.execute("SELECT request_id FROM pending_bot_request").fetchall()
     req_id = rows[0]["request_id"]
     await dispatch(make("approver-id", "approver", approver_ids=approvers), f"!approve {req_id}")
@@ -448,7 +486,10 @@ async def test_approve_already_resolved(ctx):
 async def test_approve_mm_error(ctx):
     make, mm, *_ = ctx
     approvers = frozenset(["approver-id"])
-    await dispatch(make(approver_ids=approvers), "!create demo-bot")
+    await dispatch(
+        make(approver_ids=approvers),
+        "!create demo-bot --repo https://git.example/team/project --criticality 2",
+    )
     rows = (
         make(approver_ids=approvers)
         .pending_repo._conn.execute("SELECT request_id FROM pending_bot_request")
@@ -465,7 +506,10 @@ async def test_approve_mm_error(ctx):
 async def test_create_requires_approval_when_approvers_set(ctx):
     make, mm, bot_repo, _, pending_repo = ctx
     approvers = frozenset(["approver-id"])
-    reply = await dispatch(make(approver_ids=approvers), "!create demo-bot")
+    reply = await dispatch(
+        make(approver_ids=approvers),
+        "!create demo-bot --repo https://git.example/team/project --criticality 2",
+    )
     assert "pending approval" in reply or "submitted for approval" in reply
     assert len(mm.created) == 0
     rows = pending_repo._conn.execute(
@@ -488,7 +532,10 @@ async def test_create_requires_approval_when_approvers_set(ctx):
 async def test_deny_flow(ctx):
     make, mm, _br, _, pending_repo = ctx
     approvers = frozenset(["approver-id"])
-    await dispatch(make(approver_ids=approvers), "!create demo-bot")
+    await dispatch(
+        make(approver_ids=approvers),
+        "!create demo-bot --repo https://git.example/team/project --criticality 2",
+    )
     rows = pending_repo._conn.execute("SELECT request_id FROM pending_bot_request").fetchall()
     req_id = rows[0]["request_id"]
 
@@ -529,7 +576,10 @@ async def test_deny_request_not_found(ctx):
 async def test_deny_already_resolved(ctx):
     make, *_ = ctx
     approvers = frozenset(["approver-id"])
-    await dispatch(make(approver_ids=approvers), "!create demo-bot")
+    await dispatch(
+        make(approver_ids=approvers),
+        "!create demo-bot --repo https://git.example/team/project --criticality 2",
+    )
     rows = (
         make(approver_ids=approvers)
         .pending_repo._conn.execute("SELECT request_id FROM pending_bot_request")
