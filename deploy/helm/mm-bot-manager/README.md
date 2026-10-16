@@ -45,7 +45,7 @@ the chart reads the listed fixed keys and does not create Secrets itself.
 | `imagePullSecrets` | `[]` | Pod image pull Secret references, e.g. `[{name: harbor-pull}]`. |
 | `nameOverride`, `fullnameOverride` | `""`, `""` | Override generated resource names. |
 | `app.existingSecret` | `mm-bot-manager-app` | Secret with `MM_TOKEN` and `MM_BOT_TOKEN`. |
-| `mattermost` | `url=https://mm.example.com`, `approvers=""`, `catalogViewers=""`, `verifySSL=true` | Mattermost endpoint and access/TLS settings. Imports require `approvers`; global catalog readers are approvers plus `catalogViewers`. |
+| `mattermost` | `url=https://mm.example.com`, `approvers=""`, `catalogViewers=""`, `defaultLanguage=en`, `verifySSL=true` | Mattermost endpoint and access/TLS settings. Imports require `approvers`; global catalog readers are approvers plus `catalogViewers`. |
 | `logLevel` | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `health` | `host=0.0.0.0`, `port=8080` | Pod-local liveness/readiness listener. |
 | `probes` | startup `5s/2s/30`; readiness `10s/2s/3`; liveness `10s/2s/6` | Probe period / timeout / failure threshold. |

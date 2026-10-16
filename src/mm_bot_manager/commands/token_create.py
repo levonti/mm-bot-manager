@@ -6,15 +6,17 @@ from .parser import ParsedArgs
 
 async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     if not args.positional:
-        return 'Usage: `!token create <username> [--description "..."]`'
+        return ctx.tr("token_create.usage_token_create_username_description")
     if ctx.channel_type != "D":
-        return "Tokens can only be created in a direct message to this manager."
+        return ctx.tr("token_create.tokens_can_only_be_created_in_a")
     username = args.positional[0]
     bot = ctx.bot_repo.get_by_owner_and_username(ctx.caller_user_id, username)
     if bot is None:
-        return f"Bot `@{username}` not found or not owned by you."
+        return ctx.tr("delete_bot.bot_not_found_or_not_owned_by", v0=username)
 
-    description = args.take_flag("description") or f"minted by @{ctx.caller_username}"
+    description = args.take_flag("description") or ctx.tr(
+        "tokens.default_description", username=ctx.caller_username
+    )
     try:
         return await mint_and_deliver_token(
             ctx,
@@ -23,6 +25,6 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
             description=description,
         )
     except OperationError as e:
-        return f"Could not create token: {e}"
+        return ctx.tr("token_create.could_not_create_token", v0=ctx.error(e))
     except MattermostError as e:
-        return f"Could not create token (API status {e.status})."
+        return ctx.tr("token_create.could_not_create_token_api_status", v0=e.status)

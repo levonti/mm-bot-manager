@@ -4,8 +4,10 @@ import re
 from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit
 
+from .i18n import UserFacingError
 
-class MetadataError(ValueError):
+
+class MetadataError(UserFacingError, ValueError):
     pass
 
 
@@ -17,16 +19,16 @@ class BotMetadata:
 
 def validate_criticality(criticality: str | int | None) -> int:
     if isinstance(criticality, bool) or str(criticality) not in {"1", "2", "3"}:
-        raise MetadataError("Criticality must be 1 (critical), 2 (important), or 3 (auxiliary).")
+        raise MetadataError("metadata.criticality_must_be_critical_important_or_auxiliary")
     return int(str(criticality))
 
 
 def validate_metadata(repository: str | None, criticality: str | int | None) -> BotMetadata:
     if not repository or not isinstance(repository, str):
-        raise MetadataError("Both --repo and --criticality are required.")
+        raise MetadataError("metadata.both_repo_and_criticality_are_required")
     repository = repository.strip()
     if len(repository) > 2048 or re.search(r"[\s\x00-\x1f\x7f]", unquote(repository)):
-        raise MetadataError("Invalid repository URL; use HTTPS or SSH without credentials.")
+        raise MetadataError("metadata.invalid_repository_url_use_https_or_ssh")
     value = validate_criticality(criticality)
     try:
         if repository.startswith(("https://", "ssh://")):
@@ -49,9 +51,7 @@ def validate_metadata(repository: str | None, criticality: str | int | None) -> 
             raise ValueError
     except ValueError:
         # Do not echo a rejected URL: it might contain a token or password.
-        raise MetadataError(
-            "Use an HTTPS or SSH repository URL without credentials/query/fragment."
-        ) from None
+        raise MetadataError("metadata.use_an_https_or_ssh_repository_url") from None
     return BotMetadata(repository, value)
 
 

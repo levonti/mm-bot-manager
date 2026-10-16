@@ -117,7 +117,7 @@ async def test_main_waits_for_in_flight_health_handler_before_closing_db(
         task.add_done_callback(handler_tasks.discard)
         return FakeHealthServer()
 
-    async def resolve_approvers(*_args):
+    async def resolve_approvers(*_args, **_kwargs):
         return frozenset()
 
     async def stream_events(*_args, **_kwargs):

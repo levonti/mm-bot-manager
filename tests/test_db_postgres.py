@@ -447,8 +447,8 @@ async def test_postgres_catalog_filters_and_literal_wildcards(isolated_pg):
     ctx = import_context(conn)
     seed(ctx, criticality=1, description="SQL_100% literal")
     seed(ctx, 1, criticality=2, description="another")
-    assert "1 matching bots" in await dispatch(approver(ctx), "!catalog --search 100%")
-    assert "1 matching bots" in await dispatch(
+    assert "1 matching bot" in await dispatch(approver(ctx), "!catalog --search 100%")
+    assert "1 matching bot" in await dispatch(
         approver(ctx), "!catalog --criticality 2 --owner alice"
     )
     assert "0 matching bots" in await dispatch(approver(ctx), "!catalog --search invalid")
@@ -469,3 +469,45 @@ def test_postgres_backfill_preview_accepts_old_schema_in_read_only_session(isola
             preview.execute("UPDATE bot SET username = 'changed'")
     finally:
         preview.close()
+
+
+async def test_postgres_language_and_catalog_format_survive_reconnect(isolated_pg, pg_dsn):
+    from mm_bot_manager.repository import PreferenceRepo
+    from tests.test_imports import ALICE, BOB, import_context
+    from tests.test_registry import seed
+
+    conn, schema = isolated_pg
+    ctx = replace(import_context(conn), catalog_viewer_ids=frozenset({ALICE}))
+    await dispatch(ctx, "!language ru")
+    seed(ctx)
+    output = await dispatch(ctx, "!catalog --format table")
+    assert "\n\n|" in output
+    other = connect_postgres(pg_dsn)
+    try:
+        other.execute(f'SET search_path TO "{schema}"')
+        init_schema(other)
+        assert PreferenceRepo(other).get(ALICE) == ("ru", "table")
+        assert PreferenceRepo(other).get(BOB) == ("auto", "cards")
+        other_ctx = replace(import_context(other), catalog_viewer_ids=frozenset({ALICE}))
+        assert "\n\n|" in await dispatch(other_ctx, "!catalog")
+    finally:
+        other.close()
+
+
+def test_preference_upgrade_preserves_bots_and_rejects_invalid_codes(isolated_pg):
+    from mm_bot_manager.db import transaction
+    from mm_bot_manager.repository import PreferenceRepo
+    from tests.test_imports import import_context
+    from tests.test_registry import seed
+
+    conn, _ = isolated_pg
+    ctx = import_context(conn)
+    bot = seed(ctx)
+    conn.execute("DROP TABLE user_preference")
+    init_schema(conn)
+    assert ctx.bot_repo.get(bot.bot_user_id) == bot
+    assert PreferenceRepo(conn).get("owner") == ("auto", "cards")
+    with pytest.raises(Exception, match="constraint"), transaction(conn):
+        conn.execute(
+            "INSERT INTO user_preference (user_id, language) VALUES ('owner', 'unsupported')"
+        )

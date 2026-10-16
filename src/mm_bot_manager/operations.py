@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, NoReturn
 
 from .db import transaction
+from .i18n import Message, UserFacingError
 from .logging import get_logger
 from .metadata import validate_metadata
 from .mm_client import MattermostError
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
-class OperationError(RuntimeError):
+class OperationError(UserFacingError, RuntimeError):
     """Safe, credential-free message that can be returned to the caller."""
 
 
@@ -98,8 +99,7 @@ def _failed_creation(
     if not isinstance(exc, Exception):
         raise exc
     raise OperationError(
-        f"The API outcome is uncertain (operation `{operation_id}`). "
-        "It will not be retried automatically; contact the operator."
+        "operations.the_api_outcome_is_uncertain_operation_it", v0=operation_id
     ) from None
 
 
@@ -120,9 +120,11 @@ async def create_managed_bot(
     request_id = request.request_id if request else None
     with transaction(ctx.operation_repo.conn):
         if ctx.operation_repo.active_for("bot_create", username):
-            raise OperationError("An unfinished operation for this bot requires operator review.")
+            raise OperationError("operations.an_unfinished_operation_for_this_bot_requires")
         if request_id and not ctx.pending_repo.claim(request_id, ctx.caller_user_id):
-            raise OperationError(f"Request `{request_id}` is already being processed or resolved.")
+            raise OperationError(
+                "deny.request_is_already_being_processed_or_resolved", v0=request_id
+            )
         operation_id = ctx.operation_repo.start("bot_create", username, request_id)
     try:
         bot = await ctx.mm.create_bot(
@@ -153,19 +155,19 @@ async def create_managed_bot(
                 resolved_by=ctx.caller_user_id,
                 expected_status="provisioning",
             ):
-                raise OperationError("The approval state changed during provisioning.")
+                raise OperationError("operations.the_approval_state_changed_during_provisioning")
             ctx.operation_repo.update(operation_id, "completed")
     except BaseException as exc:
         disabled = await compensate(ctx, operation_id, "bot_create", bot_user_id, request_id)
         if not isinstance(exc, Exception):
             raise
         outcome = (
-            "The incomplete bot was disabled."
+            Message("operations.the_incomplete_bot_was_disabled")
             if disabled
-            else "Disabling the incomplete bot requires operator attention."
+            else Message("operations.disabling_the_incomplete_bot_requires_operator_attention")
         )
         raise OperationError(
-            f"Bot creation was not completed (operation `{operation_id}`). {outcome}"
+            "operations.bot_creation_was_not_completed_operation", v0=operation_id, v1=outcome
         ) from None
     return bot_user_id
 
@@ -178,10 +180,12 @@ async def mint_and_deliver_token(
     description: str,
 ) -> str:
     if ctx.channel_type != "D":
-        raise OperationError("Tokens can only be created in a direct message to this manager.")
+        raise OperationError("token_create.tokens_can_only_be_created_in_a")
     with transaction(ctx.operation_repo.conn):
         if ctx.operation_repo.active_for("token_create", bot_user_id):
-            raise OperationError("An unfinished token operation requires operator review.")
+            raise OperationError(
+                "operations.an_unfinished_token_operation_requires_operator_review"
+            )
         operation_id = ctx.operation_repo.start("token_create", bot_user_id)
     marker = f"[mm-bot-manager:{operation_id}]"
     try:
@@ -203,9 +207,12 @@ async def mint_and_deliver_token(
         await ctx.bot_mm.create_post(
             channel_id=ctx.channel_id,
             message=(
-                f"Minted token for `@{username}`.\n- token id: `{token_id}`\n\n"
-                "Store this token securely. This message remains in your Mattermost history.\n"
-                f"```\n{token_value}\n```"
+                ctx.tr(
+                    "operations.minted_token_for_token_id_store_this",
+                    v0=username,
+                    v1=token_id,
+                    v2=token_value,
+                )
             ),
         )
         ctx.operation_repo.update(operation_id, "completed")
@@ -213,11 +220,15 @@ async def mint_and_deliver_token(
         revoked = await compensate(ctx, operation_id, "token_create", token_id)
         if not isinstance(exc, Exception):
             raise
-        outcome = "The token was revoked." if revoked else "Revocation requires operator attention."
+        outcome = (
+            Message("operations.the_token_was_revoked")
+            if revoked
+            else Message("operations.revocation_requires_operator_attention")
+        )
         raise OperationError(
-            f"Token issuance did not complete (operation `{operation_id}`). {outcome}"
+            "operations.token_issuance_did_not_complete_operation", v0=operation_id, v1=outcome
         ) from None
-    return f"Minted token for `@{username}` and sent it in this direct message (id `{token_id}`)."
+    return ctx.tr("operations.minted_token_for_and_sent_it_in", v0=username, v1=token_id)
 
 
 async def recover_operations(ctx: CommandContext) -> int:

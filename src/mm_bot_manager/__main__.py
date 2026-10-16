@@ -6,6 +6,7 @@ from .config import Settings, load_settings
 from .db import DbConn, connect, connect_postgres, init_schema
 from .dispatcher import CommandContextFactory, MessageRouter
 from .health import start_health_server
+from .i18n import tr, validate_catalogs
 from .logging import configure_logging, get_logger
 from .mm_client import MattermostClient, MattermostError
 from .operations import recover_operations
@@ -15,7 +16,11 @@ from .ws_listener import stream_events
 
 
 async def _resolve_approvers(
-    mm: MattermostClient, usernames: list[str], setting: str = "MM_APPROVERS"
+    mm: MattermostClient,
+    usernames: list[str],
+    setting: str = "MM_APPROVERS",
+    *,
+    language: str = "en",
 ) -> frozenset[str]:
     ids: list[str] = []
     for username in usernames:
@@ -24,8 +29,7 @@ async def _resolve_approvers(
             ids.append(user["id"])
         except MattermostError as e:
             raise SystemExit(
-                f"Cannot resolve approver username '{username}' (API status {e.status}). "
-                f"Fix {setting} or remove it to disable the configured access."
+                tr(language, "startup.resolve", username=username, status=e.status, setting=setting)
             ) from None
     return frozenset(ids)
 
@@ -46,6 +50,7 @@ def _connect_database(settings: Settings) -> DbConn:
 
 
 async def serve(settings: Settings, conn: DbConn) -> None:
+    validate_catalogs()
     log = get_logger("mm_bot_manager")
     init_schema(conn)
     kw = {"verify_ssl": settings.mm_verify_ssl}
@@ -56,9 +61,14 @@ async def serve(settings: Settings, conn: DbConn) -> None:
         me = await bot_mm.get_me()
         manager_user_id = me["id"]
         manager_username = me["username"]
-        approver_ids = await _resolve_approvers(admin_mm, settings.approver_usernames)
+        approver_ids = await _resolve_approvers(
+            admin_mm, settings.approver_usernames, language=settings.mm_default_language
+        )
         catalog_ids = await _resolve_approvers(
-            admin_mm, settings.catalog_viewer_usernames, "MM_CATALOG_VIEWERS"
+            admin_mm,
+            settings.catalog_viewer_usernames,
+            "MM_CATALOG_VIEWERS",
+            language=settings.mm_default_language,
         )
         log.info("logged_in", user_id=manager_user_id, approver_count=len(approver_ids))
         router = MessageRouter(manager_user_id, manager_username)
@@ -71,6 +81,7 @@ async def serve(settings: Settings, conn: DbConn) -> None:
             manager_user_id=manager_user_id,
             approver_ids=approver_ids,
             catalog_viewer_ids=catalog_ids,
+            default_language=settings.mm_default_language,
         )
         recovery_ctx = factory.build(
             caller_user_id=manager_user_id, caller_username=manager_username, channel_id=""

@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+from typing import Any
 
+from ..i18n import error_text, tr
+from ..localization import LanguageResolver
 from ..mm_client import MattermostClient
 from ..repository import BotRepo, OperationRepo, PendingRequestRepo, TokenRepo
 
@@ -19,3 +22,12 @@ class CommandContext:
     operation_repo: OperationRepo
     channel_type: str | None = None  # Unknown channels must never receive credentials.
     catalog_viewer_ids: frozenset[str] = frozenset()
+    language: str = "en"
+    default_language: str = "en"
+    language_resolver: LanguageResolver | None = None
+
+    def tr(self, key: str, **params: Any) -> str:
+        return tr(self.language, key, **params)
+
+    def error(self, error: BaseException) -> str:
+        return error_text(error, self.language)

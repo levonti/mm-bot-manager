@@ -1,4 +1,4 @@
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, HttpUrl, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     # If empty, creation is immediate and imports are disabled.
     mm_approvers: str = Field(default="")
     mm_catalog_viewers: str = Field(default="")
+    mm_default_language: Literal["en", "ru"] = "en"
     max_workers: int = Field(default=4, ge=1, le=32)
     event_queue_size: int = Field(default=100, ge=1, le=10000)
     shutdown_timeout: float = Field(default=30, ge=1, le=300)

@@ -1,9 +1,11 @@
 import asyncio
 import json
 import re
+from dataclasses import replace
 from typing import Any
 
 from .commands import CommandContext, dispatch
+from .localization import LanguageResolver, user_language
 from .logging import get_logger
 from .mm_client import MattermostClient
 from .repository import BotRepo, OperationRepo, PendingRequestRepo, PostRepo, TokenRepo
@@ -85,7 +87,12 @@ async def handle_event(
             reply = await dispatch(ctx, command_text)
         except Exception as exc:
             log.error("command_failed", post_id=post_id, error_type=type(exc).__name__)
-            reply = "Something went wrong running that command. Contact the operator."
+            try:
+                language = await user_language(ctx, ctx.caller_user_id)
+            except Exception:
+                language = ctx.default_language
+            ctx = replace(ctx, language=language)
+            reply = ctx.tr("error.unexpected")
         await ctx_factory.bot_mm.create_post(channel_id=channel_id, message=reply)
     except asyncio.CancelledError:
         ctx_factory.post_repo.finish(post_id, interrupted=True)
@@ -110,6 +117,7 @@ class CommandContextFactory:
         manager_user_id: str,
         approver_ids: frozenset[str],
         catalog_viewer_ids: frozenset[str] = frozenset(),
+        default_language: str = "en",
     ) -> None:
         self._bot_repo = bot_repo
         self._token_repo = token_repo
@@ -119,6 +127,8 @@ class CommandContextFactory:
         self._manager_user_id = manager_user_id
         self._approver_ids = approver_ids
         self._catalog_viewer_ids = catalog_viewer_ids
+        self.language_resolver = LanguageResolver(bot_repo.conn, admin_mm, default_language)
+        self.default_language = default_language
         self.operation_repo = OperationRepo(bot_repo.conn)
         self.post_repo = PostRepo(bot_repo.conn)
 
@@ -144,4 +154,7 @@ class CommandContextFactory:
             operation_repo=self.operation_repo,
             channel_type=channel_type,
             catalog_viewer_ids=self._catalog_viewer_ids,
+            language=self.default_language,
+            default_language=self.default_language,
+            language_resolver=self.language_resolver,
         )

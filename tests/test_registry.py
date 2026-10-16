@@ -203,7 +203,7 @@ async def test_catalog_filters_order_pagination_and_deleted_exclusion(env):
     assert "demo-22" not in page1 + page2
     filtered = await dispatch(ctx, "!catalog --owner @bob --criticality 2")
     assert "4 matching bots" in filtered
-    assert "1 matching bots" in await dispatch(ctx, "!catalog --search DEMO-21")
+    assert "1 matching bot" in await dispatch(ctx, "!catalog --search DEMO-21")
     assert "0 matching bots" in await dispatch(ctx, "!catalog --search %")
     assert "0 matching bots" in await dispatch(ctx, '!catalog --search "x\' OR 1=1 --"')
     assert "No bots" in await dispatch(ctx, "!catalog --page 999")
@@ -455,7 +455,7 @@ def test_migration_refuses_bot_or_disabled_actor_without_backfilling(tmp_path):
 @pytest.mark.parametrize(
     "error,expected",
     [
-        (MetadataError("invalid attributes"), "invalid attributes"),
+        (MetadataError("invalid attributes"), "Contact the operator"),
         (RuntimeError("credential-secret"), "check input"),
     ],
 )
