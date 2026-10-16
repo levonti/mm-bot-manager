@@ -9,5 +9,11 @@ __pycache__
 .mypy_cache
 tests
 .env
+.claude
+.codex
+.agents
+.uv-cache
+coverage.xml
+report.xml
 data
 README.md

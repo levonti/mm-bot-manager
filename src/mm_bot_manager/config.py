@@ -7,6 +7,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     mm_url: HttpUrl = Field(
@@ -16,16 +17,19 @@ class Settings(BaseSettings):
     mm_token: str = Field(
         ...,
         min_length=1,
+        repr=False,
         description="Personal access token from a system_admin user (for bot management API calls)",
     )
     mm_bot_token: str = Field(
         ...,
         min_length=1,
-        description="Personal access token of the manager bot account (WS + posting)",
+        repr=False,
+        description="Generated access token of the manager bot account (WS + posting)",
     )
     db_path: str = Field(default="/data/mm-bot-manager.sqlite3")
     db_url: str | None = Field(
         default=None,
+        repr=False,
         description="PostgreSQL DSN (e.g. postgresql://user:pass@host/db). "
         "When set, takes precedence over db_path.",
     )
@@ -34,6 +38,9 @@ class Settings(BaseSettings):
     # Comma-separated Mattermost usernames of users who can approve bot creation.
     # If empty, bot creation is immediate (no approval required).
     mm_approvers: str = Field(default="")
+    max_workers: int = Field(default=4, ge=1, le=32)
+    event_queue_size: int = Field(default=100, ge=1, le=10000)
+    shutdown_timeout: float = Field(default=30, ge=1, le=300)
 
     @property
     def approver_usernames(self) -> list[str]:

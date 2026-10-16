@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from .db import DbConn
 
@@ -56,6 +57,10 @@ def _token_from_row(row: Any) -> TokenRecord:
 class BotRepo:
     def __init__(self, conn: DbConn) -> None:
         self._conn = conn
+
+    @property
+    def conn(self) -> DbConn:
+        return self._conn
 
     def insert(
         self,
@@ -159,7 +164,7 @@ class PendingRequestRecord:
     requester_user_id: str
     requester_username: str
     created_at: str
-    status: str  # pending | approved | denied
+    status: str  # pending | provisioning | approved | denied | needs_review
     resolved_at: str | None
     resolved_by: str | None
     deny_reason: str | None
@@ -241,14 +246,32 @@ class PendingRequestRepo:
         status: str,
         resolved_by: str,
         deny_reason: str | None = None,
-    ) -> None:
-        self._conn.execute(
+        expected_status: str = "pending",
+    ) -> bool:
+        cursor = self._conn.execute(
             """
             UPDATE pending_bot_request
                SET status = ?, resolved_at = ?, resolved_by = ?, deny_reason = ?
-             WHERE request_id = ?
+             WHERE request_id = ? AND status = ?
             """,
-            (status, _now_iso(), resolved_by, deny_reason, request_id),
+            (status, _now_iso(), resolved_by, deny_reason, request_id, expected_status),
+        )
+        return bool(cursor.rowcount == 1)
+
+    def claim(self, request_id: str, resolved_by: str) -> bool:
+        cursor = self._conn.execute(
+            "UPDATE pending_bot_request SET status = 'provisioning', resolved_by = ? "
+            "WHERE request_id = ? AND status = 'pending'",
+            (resolved_by, request_id),
+        )
+        return bool(cursor.rowcount == 1)
+
+    def release(self, request_id: str) -> None:
+        self._conn.execute(
+            "UPDATE pending_bot_request SET status = 'pending', resolved_by = NULL, "
+            "resolved_at = NULL WHERE request_id = ? "
+            "AND status IN ('provisioning', 'needs_review')",
+            (request_id,),
         )
 
 
@@ -296,3 +319,81 @@ class TokenRepo:
             "UPDATE token SET revoked_at = ? WHERE token_id = ?",
             (_now_iso(), token_id),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class OperationRecord:
+    operation_id: str
+    kind: str
+    resource: str
+    request_id: str | None
+    status: str
+    remote_id: str | None
+
+
+class OperationRepo:
+    """Durable intent and remote IDs only; never stores token values or reply bodies."""
+
+    def __init__(self, conn: DbConn) -> None:
+        self.conn = conn
+
+    def start(self, kind: str, resource: str, request_id: str | None = None) -> str:
+        operation_id = uuid4().hex
+        now = _now_iso()
+        self.conn.execute(
+            "INSERT INTO operation (operation_id, kind, resource, request_id, status, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, 'started', ?, ?)",
+            (operation_id, kind, resource, request_id, now, now),
+        )
+        return operation_id
+
+    def update(self, operation_id: str, status: str, remote_id: str | None = None) -> None:
+        self.conn.execute(
+            "UPDATE operation SET status = ?, remote_id = COALESCE(?, remote_id), "
+            "updated_at = ? WHERE operation_id = ?",
+            (status, remote_id, _now_iso(), operation_id),
+        )
+
+    def unfinished(self) -> list[OperationRecord]:
+        rows = self.conn.execute(
+            "SELECT operation_id, kind, resource, request_id, status, remote_id FROM operation "
+            "WHERE status NOT IN ('completed', 'compensated') ORDER BY created_at, operation_id"
+        ).fetchall()
+        return [OperationRecord(**dict(row)) for row in rows]
+
+    def active_for(self, kind: str, resource: str) -> bool:
+        return (
+            self.conn.execute(
+                "SELECT 1 FROM operation WHERE kind = ? AND resource = ? "
+                "AND status NOT IN ('completed', 'compensated')",
+                (kind, resource),
+            ).fetchone()
+            is not None
+        )
+
+
+class PostRepo:
+    def __init__(self, conn: DbConn) -> None:
+        self.conn = conn
+
+    def claim(self, post_id: str) -> bool:
+        cursor = self.conn.execute(
+            "INSERT INTO processed_post (post_id, status, created_at) "
+            "VALUES (?, 'processing', ?) ON CONFLICT (post_id) DO NOTHING",
+            (post_id, _now_iso()),
+        )
+        return bool(cursor.rowcount == 1)
+
+    def finish(self, post_id: str, *, interrupted: bool = False) -> None:
+        self.conn.execute(
+            "UPDATE processed_post SET status = ?, finished_at = ? WHERE post_id = ?",
+            ("interrupted" if interrupted else "completed", _now_iso(), post_id),
+        )
+
+    def interrupt_unfinished(self) -> int:
+        cursor = self.conn.execute(
+            "UPDATE processed_post SET status = 'interrupted', finished_at = ? "
+            "WHERE status = 'processing'",
+            (_now_iso(),),
+        )
+        return int(cursor.rowcount)

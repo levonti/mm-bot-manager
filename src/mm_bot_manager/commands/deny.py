@@ -17,18 +17,17 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     if req.status != "pending":
         return f"Request `{request_id}` is already **{req.status}**."
 
-    ctx.pending_repo.resolve(
+    if not ctx.pending_repo.resolve(
         request_id,
         status="denied",
         resolved_by=ctx.caller_user_id,
         deny_reason=reason,
-    )
+    ):
+        return f"Request `{request_id}` is already being processed or resolved."
 
     reason_line = f"\nReason: {reason}" if reason else ""
     try:
-        dm = await ctx.bot_mm.create_direct_channel(
-            ctx.manager_user_id, req.requester_user_id
-        )
+        dm = await ctx.bot_mm.create_direct_channel(ctx.manager_user_id, req.requester_user_id)
         await ctx.bot_mm.create_post(
             channel_id=dm["id"],
             message=(

@@ -6,25 +6,50 @@ all tests for speed. Each test gets a clean slate via a transaction that is
 rolled back after the test.
 """
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from uuid import uuid4
+
 import pytest
 from testcontainers.postgres import PostgresContainer
 
+from mm_bot_manager.commands import CommandContext, dispatch
 from mm_bot_manager.db import DbConn, connect_postgres, init_schema
-from mm_bot_manager.repository import BotRepo, PendingRequestRepo, TokenRepo
+from mm_bot_manager.operations import recover_operations
+from mm_bot_manager.repository import (
+    BotRepo,
+    OperationRepo,
+    PendingRequestRepo,
+    PostRepo,
+    TokenRepo,
+)
+from mm_bot_manager.runtime import instance_lock
+from tests.test_commands import FakeMM
 
 POSTGRES_IMAGE = "postgres:15-alpine"
 
 
 @pytest.fixture(scope="session")
-def pg_conn() -> DbConn:  # type: ignore[return]
+def pg_dsn():
+    if dsn := os.environ.get("MM_TEST_POSTGRES_DSN"):
+        yield dsn
+        return
     with PostgresContainer(POSTGRES_IMAGE) as pg:
         # get_connection_url() returns postgresql+psycopg://... (SQLAlchemy style);
         # psycopg.connect() only accepts plain postgresql:// URIs.
         url = pg.get_connection_url()
         dsn = url.split("+")[0] + "://" + url.split("://")[1]
-        conn = connect_postgres(dsn)
-        init_schema(conn)
+        yield dsn
+
+
+@pytest.fixture(scope="session")
+def pg_conn(pg_dsn):
+    conn = connect_postgres(pg_dsn)
+    init_schema(conn)
+    try:
         yield conn
+    finally:
         conn.close()
 
 
@@ -36,6 +61,7 @@ def repos(pg_conn: DbConn) -> tuple[BotRepo, TokenRepo, PendingRequestRepo]:  # 
 
 
 # ── BotRepo ───────────────────────────────────────────────────────────────────
+
 
 def test_insert_and_fetch_bot(repos):
     bots, _, __ = repos
@@ -102,6 +128,7 @@ def test_soft_delete(repos):
 
 # ── TokenRepo ─────────────────────────────────────────────────────────────────
 
+
 def test_token_lifecycle(repos):
     bots, tokens, _ = repos
     bots.insert(
@@ -124,6 +151,7 @@ def test_token_lifecycle(repos):
 
 
 # ── PendingRequestRepo ────────────────────────────────────────────────────────
+
 
 def test_pending_request_lifecycle(repos):
     _, __, pending = repos
@@ -171,3 +199,145 @@ def test_get_nonexistent_returns_none(repos):
     assert bots.get_by_owner_and_username("nobody", "ghost") is None
     assert tokens.get("no-such-token") is None
     assert pending.get("no-such-request") is None
+
+
+@pytest.fixture()
+def isolated_pg(pg_dsn):
+    """Use a fresh schema so service transactions can really commit and roll back."""
+    conn = connect_postgres(pg_dsn)
+    schema = f"hardening_{uuid4().hex}"
+    conn.execute(f"CREATE SCHEMA {schema}")
+    conn.execute(f"SET search_path TO {schema}")
+    init_schema(conn)
+    try:
+        yield conn, schema
+    finally:
+        conn.execute(f"DROP SCHEMA {schema} CASCADE")
+        conn.close()
+
+
+def parallel_connections(dsn, schema, action):
+    def run(_):
+        other = connect_postgres(dsn)
+        try:
+            other.execute(f"SET search_path TO {schema}")
+            return action(other)
+        finally:
+            other.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        return list(pool.map(run, range(2)))
+
+
+def test_post_claim_is_atomic_across_postgres_connections(isolated_pg, pg_dsn):
+    _, schema = isolated_pg
+    results = parallel_connections(pg_dsn, schema, lambda c: PostRepo(c).claim("same-post"))
+    assert sorted(results) == [False, True]
+
+
+def test_approval_claim_is_atomic_across_postgres_connections(isolated_pg, pg_dsn):
+    conn, schema = isolated_pg
+    pending = PendingRequestRepo(conn)
+    pending.create(
+        request_id="req",
+        username="demo-bot",
+        display_name=None,
+        description=None,
+        requester_user_id="alice",
+        requester_username="alice",
+    )
+    results = parallel_connections(
+        pg_dsn, schema, lambda c: PendingRequestRepo(c).claim("req", "a")
+    )
+    assert sorted(results) == [False, True]
+    assert not pending.resolve("req", status="denied", resolved_by="b")
+    assert pending.get("req").status == "provisioning"
+
+
+def test_postgres_instance_lock_is_exclusive_and_released(isolated_pg, pg_dsn):
+    conn, _ = isolated_pg
+    other = connect_postgres(pg_dsn)
+    try:
+        with (
+            instance_lock(conn, "unused"),
+            pytest.raises(RuntimeError, match="Another"),
+            instance_lock(other, "unused"),
+        ):
+            pytest.fail("second instance acquired the lock")
+        with instance_lock(other, "unused"):
+            pass
+    finally:
+        other.close()
+
+
+async def test_postgres_compensation_and_restart_recovery(isolated_pg, monkeypatch):
+    conn, _ = isolated_pg
+    mm = FakeMM()
+    ctx = CommandContext(
+        caller_user_id="alice",
+        caller_username="alice",
+        channel_id="dm-alice",
+        bot_repo=BotRepo(conn),
+        token_repo=TokenRepo(conn),
+        pending_repo=PendingRequestRepo(conn),
+        mm=mm,
+        bot_mm=mm,
+        manager_user_id="mgr",
+        approver_ids=frozenset(),
+        operation_repo=OperationRepo(conn),
+        channel_type="D",
+    )
+    await dispatch(ctx, "!create demo-bot")
+    original = ctx.token_repo.record
+
+    def failing_record(**kwargs):
+        original(**kwargs)
+        raise RuntimeError("write failed before commit")
+
+    monkeypatch.setattr(ctx.token_repo, "record", failing_record)
+    mm.raise_on["revoke_user_access_token"] = RuntimeError("temporary API failure")
+    await dispatch(ctx, "!token create demo-bot")
+    assert ctx.token_repo.get("tok-0") is None  # The failed transaction really rolled back.
+    assert ctx.operation_repo.unfinished()[0].remote_id == "tok-0"
+    assert await recover_operations(ctx) == 0
+    assert mm.tokens_revoked == ["tok-0"]
+    assert not ctx.operation_repo.unfinished()
+
+
+async def test_postgres_approval_failure_rolls_back_ownership(isolated_pg, monkeypatch):
+    conn, _ = isolated_pg
+    mm = FakeMM()
+    ctx = CommandContext(
+        caller_user_id="alice",
+        caller_username="alice",
+        channel_id="dm-alice",
+        bot_repo=BotRepo(conn),
+        token_repo=TokenRepo(conn),
+        pending_repo=PendingRequestRepo(conn),
+        mm=mm,
+        bot_mm=mm,
+        manager_user_id="mgr",
+        approver_ids=frozenset({"approver"}),
+        operation_repo=OperationRepo(conn),
+        channel_type="D",
+    )
+    ctx.pending_repo.create(
+        request_id="req",
+        username="demo-bot",
+        display_name=None,
+        description=None,
+        requester_user_id="alice",
+        requester_username="alice",
+    )
+    resolve = ctx.pending_repo.resolve
+
+    def fail_approval(*args, **kwargs):
+        if kwargs["status"] == "approved":
+            raise RuntimeError("write failed")
+        return resolve(*args, **kwargs)
+
+    monkeypatch.setattr(ctx.pending_repo, "resolve", fail_approval)
+    await dispatch(replace(ctx, caller_user_id="approver"), "!approve req")
+    assert mm.disabled == ["bot-0"]
+    assert not ctx.bot_repo.list_by_owner("alice")
+    assert ctx.pending_repo.get("req").status == "failed"

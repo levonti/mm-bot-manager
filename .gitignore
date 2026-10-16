@@ -25,6 +25,9 @@ htmlcov/
 .dmypy.json
 dmypy.json
 .ruff_cache/
+.uv-cache/
+coverage.xml
+report.xml
 .pyre/
 .pytype/
 

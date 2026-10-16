@@ -2,6 +2,7 @@ services:
   mm-bot-manager:
     build: .
     restart: unless-stopped
+    stop_grace_period: ${STOP_GRACE_PERIOD:-65s}
     depends_on:
       postgres:
         condition: service_healthy
@@ -13,6 +14,9 @@ services:
       MM_VERIFY_SSL: ${MM_VERIFY_SSL:-true}
       DB_URL: postgresql://${POSTGRES_USER:-mm_bot}:${POSTGRES_PASSWORD:-secret}@postgres/${POSTGRES_DB:-mm_bot_manager}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MAX_WORKERS: ${MAX_WORKERS:-4}
+      EVENT_QUEUE_SIZE: ${EVENT_QUEUE_SIZE:-100}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-30}
 
   postgres:
     image: postgres:15-alpine

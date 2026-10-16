@@ -1,0 +1,39 @@
+image: python:3.14-slim
+
+stages:
+  - verify
+
+variables:
+  UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
+  POSTGRES_DB: mm_bot_manager_test
+  POSTGRES_USER: mm_bot_test
+  # Disposable CI service only; no password or production credential is needed.
+  POSTGRES_HOST_AUTH_METHOD: trust
+  MM_TEST_POSTGRES_DSN: "postgresql://mm_bot_test@postgres:5432/mm_bot_manager_test"
+
+verify:
+  stage: verify
+  services:
+    - name: postgres:15-alpine
+      alias: postgres
+  cache:
+    key:
+      files:
+        - uv.lock
+    paths:
+      - .uv-cache/
+  before_script:
+    - pip install --no-cache-dir uv==0.11.7
+    - uv sync --frozen --extra postgres
+  script:
+    - uv run --no-sync ruff check src tests
+    - uv run --no-sync ruff format --check src tests
+    - uv run --no-sync mypy src
+    - uv run --no-sync pytest -q --cov=mm_bot_manager --cov-branch --cov-fail-under=85 --cov-report=term-missing --cov-report=xml:coverage.xml --junitxml=report.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml

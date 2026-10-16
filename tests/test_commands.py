@@ -5,7 +5,7 @@ import pytest
 from mm_bot_manager.commands import CommandContext, dispatch
 from mm_bot_manager.db import connect, init_schema
 from mm_bot_manager.mm_client import MattermostError
-from mm_bot_manager.repository import BotRepo, PendingRequestRepo, TokenRepo
+from mm_bot_manager.repository import BotRepo, OperationRepo, PendingRequestRepo, TokenRepo
 
 
 class FakeMM:
@@ -15,6 +15,8 @@ class FakeMM:
         self.disabled: list[str] = []
         self.tokens_created: list[tuple[str, str]] = []
         self.tokens_revoked: list[str] = []
+        self.posts: list[dict[str, str]] = []
+        self.remote_tokens: dict[str, dict[str, str]] = {}
         self._next_bot_id = iter(f"bot-{i}" for i in range(100))
         self._next_token_id = iter(f"tok-{i}" for i in range(100))
         # Map method name → exception to raise on next call (consumed on use).
@@ -34,8 +36,12 @@ class FakeMM:
     async def patch_bot(self, bot_user_id, *, username=None, display_name=None, description=None):
         self._maybe_raise("patch_bot")
         self.patched.append(
-            {"bot_user_id": bot_user_id, "username": username,
-             "display_name": display_name, "description": description}
+            {
+                "bot_user_id": bot_user_id,
+                "username": username,
+                "display_name": display_name,
+                "description": description,
+            }
         )
         return {}
 
@@ -52,16 +58,24 @@ class FakeMM:
         self._maybe_raise("create_user_access_token")
         tok_id = next(self._next_token_id)
         self.tokens_created.append((user_id, description))
+        self.remote_tokens[tok_id] = {"id": tok_id, "description": description}
         return {"id": tok_id, "token": f"secret-{tok_id}", "description": description}
 
     async def revoke_user_access_token(self, token_id):
         self._maybe_raise("revoke_user_access_token")
         self.tokens_revoked.append(token_id)
+        self.remote_tokens.pop(token_id, None)
+
+    async def list_user_access_tokens(self, user_id):
+        self._maybe_raise("list_user_access_tokens")
+        return list(self.remote_tokens.values())
 
     async def create_direct_channel(self, user_id_a, user_id_b):
         return {"id": f"dm-{user_id_a}-{user_id_b}"}
 
     async def create_post(self, *, channel_id, message, root_id=None):
+        self._maybe_raise("create_post")
+        self.posts.append({"channel_id": channel_id, "message": message})
         return {}
 
 
@@ -90,6 +104,8 @@ def ctx():
             bot_mm=mm,  # type: ignore[arg-type]
             manager_user_id="mgr-id",
             approver_ids=approver_ids,
+            operation_repo=OperationRepo(conn),
+            channel_type="D",
         )
 
     yield make, mm, bot_repo, token_repo, pending_repo
@@ -97,6 +113,7 @@ def ctx():
 
 
 # ── dispatch edge cases ───────────────────────────────────────────────────────
+
 
 async def test_help(ctx):
     make, *_ = ctx
@@ -135,6 +152,7 @@ async def test_unknown_command(ctx):
 
 
 # ── create ────────────────────────────────────────────────────────────────────
+
 
 async def test_create_and_list_and_info(ctx):
     make, mm, _bot_repo, _, _pr = ctx
@@ -181,10 +199,12 @@ async def test_create_mm_403(ctx):
 
 # ── list / info ───────────────────────────────────────────────────────────────
 
+
 async def test_list_empty(ctx):
     make, *_ = ctx
     reply = await dispatch(make(), "!list")
     assert "don't own any bots" in reply
+    assert "`!create <username>`" in reply
 
 
 async def test_info_no_args(ctx):
@@ -207,6 +227,7 @@ async def test_ownership_enforced_on_info(ctx):
 
 
 # ── update ────────────────────────────────────────────────────────────────────
+
 
 async def test_update(ctx):
     make, _mm, bot_repo, *_ = ctx
@@ -247,6 +268,7 @@ async def test_update_mm_error(ctx):
 
 # ── delete ────────────────────────────────────────────────────────────────────
 
+
 async def test_delete(ctx):
     make, mm, bot_repo, _, _pr = ctx
     await dispatch(make(), "!create demo-bot")
@@ -278,12 +300,14 @@ async def test_delete_mm_error(ctx):
 
 # ── token create ──────────────────────────────────────────────────────────────
 
+
 async def test_token_create_and_revoke(ctx):
     make, mm, _, token_repo, _pr = ctx
     await dispatch(make(), "!create demo-bot")
     reply = await dispatch(make(), '!token create demo-bot --description "e2e"')
     assert "Minted token" in reply
-    assert "secret-tok-0" in reply
+    assert "secret-tok-0" not in reply
+    assert "secret-tok-0" in mm.posts[-1]["message"]
     active = token_repo.list_active_for_bot("bot-0")
     assert len(active) == 1
 
@@ -315,6 +339,7 @@ async def test_token_create_mm_error(ctx):
 
 # ── token list ────────────────────────────────────────────────────────────────
 
+
 async def test_token_list_no_args(ctx):
     make, *_ = ctx
     reply = await dispatch(make(), "!token list")
@@ -335,7 +360,7 @@ async def test_token_list_no_tokens(ctx):
 
 
 async def test_token_list_with_tokens(ctx):
-    make, _, _, token_repo, _pr = ctx
+    make, *_ = ctx
     await dispatch(make(), "!create demo-bot")
     await dispatch(make(), '!token create demo-bot --description "ci"')
     reply = await dispatch(make(), "!token list demo-bot")
@@ -344,6 +369,7 @@ async def test_token_list_with_tokens(ctx):
 
 
 # ── token revoke ──────────────────────────────────────────────────────────────
+
 
 async def test_token_revoke_no_args(ctx):
     make, *_ = ctx
@@ -358,7 +384,7 @@ async def test_token_revoke_not_tracked(ctx):
 
 
 async def test_token_revoke_already_revoked(ctx):
-    make, _, _, token_repo, _pr = ctx
+    make, *_ = ctx
     await dispatch(make(), "!create demo-bot")
     await dispatch(make(), "!token create demo-bot")
     await dispatch(make(), "!token revoke tok-0")
@@ -385,6 +411,7 @@ async def test_token_revoke_rejects_foreign_owner(ctx):
 
 # ── approve ───────────────────────────────────────────────────────────────────
 
+
 async def test_approve_denied_to_non_approver(ctx):
     make, *_ = ctx
     reply = await dispatch(make(), "!approve abc123")
@@ -406,12 +433,10 @@ async def test_approve_request_not_found(ctx):
 
 
 async def test_approve_already_resolved(ctx):
-    make, mm, bot_repo, _, pending_repo = ctx
+    make, _, _, _, pending_repo = ctx
     approvers = frozenset(["approver-id"])
     await dispatch(make(approver_ids=approvers), "!create demo-bot")
-    rows = pending_repo._conn.execute(
-        "SELECT request_id FROM pending_bot_request"
-    ).fetchall()
+    rows = pending_repo._conn.execute("SELECT request_id FROM pending_bot_request").fetchall()
     req_id = rows[0]["request_id"]
     await dispatch(make("approver-id", "approver", approver_ids=approvers), f"!approve {req_id}")
     reply = await dispatch(
@@ -424,9 +449,11 @@ async def test_approve_mm_error(ctx):
     make, mm, *_ = ctx
     approvers = frozenset(["approver-id"])
     await dispatch(make(approver_ids=approvers), "!create demo-bot")
-    rows = make(approver_ids=approvers).pending_repo._conn.execute(
-        "SELECT request_id FROM pending_bot_request"
-    ).fetchall()
+    rows = (
+        make(approver_ids=approvers)
+        .pending_repo._conn.execute("SELECT request_id FROM pending_bot_request")
+        .fetchall()
+    )
     req_id = rows[0]["request_id"]
     mm.raise_on["create_bot"] = MattermostError(500, "oops")
     reply = await dispatch(
@@ -457,13 +484,12 @@ async def test_create_requires_approval_when_approvers_set(ctx):
 
 # ── deny ─────────────────────────────────────────────────────────────────────
 
+
 async def test_deny_flow(ctx):
     make, mm, _br, _, pending_repo = ctx
     approvers = frozenset(["approver-id"])
     await dispatch(make(approver_ids=approvers), "!create demo-bot")
-    rows = pending_repo._conn.execute(
-        "SELECT request_id FROM pending_bot_request"
-    ).fetchall()
+    rows = pending_repo._conn.execute("SELECT request_id FROM pending_bot_request").fetchall()
     req_id = rows[0]["request_id"]
 
     reply = await dispatch(
@@ -504,9 +530,11 @@ async def test_deny_already_resolved(ctx):
     make, *_ = ctx
     approvers = frozenset(["approver-id"])
     await dispatch(make(approver_ids=approvers), "!create demo-bot")
-    rows = make(approver_ids=approvers).pending_repo._conn.execute(
-        "SELECT request_id FROM pending_bot_request"
-    ).fetchall()
+    rows = (
+        make(approver_ids=approvers)
+        .pending_repo._conn.execute("SELECT request_id FROM pending_bot_request")
+        .fetchall()
+    )
     req_id = rows[0]["request_id"]
     await dispatch(make("approver-id", "approver", approver_ids=approvers), f"!deny {req_id}")
     reply = await dispatch(
