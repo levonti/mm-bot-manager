@@ -4,7 +4,7 @@ from .parser import ParsedArgs
 
 async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     if ctx.caller_user_id not in ctx.approver_ids:
-        return "You are not authorised to deny bot creation requests."
+        return "You are not authorised to deny bot requests."
     if not args.positional:
         return "Usage: `!deny <request_id> [reason]`"
 
@@ -31,7 +31,7 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
         await ctx.bot_mm.create_post(
             channel_id=dm["id"],
             message=(
-                f"Your request to create bot `@{req.username}` has been **denied** "
+                f"Your {req.kind} request for bot `@{req.username}` has been **denied** "
                 f"by @{ctx.caller_username} (request `{request_id}`).{reason_line}"
             ),
         )

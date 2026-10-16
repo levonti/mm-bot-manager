@@ -38,9 +38,26 @@ CREATE TABLE IF NOT EXISTS pending_bot_request (
     status              TEXT NOT NULL DEFAULT 'pending',
     resolved_at         TEXT,
     resolved_by         TEXT,
-    deny_reason         TEXT
+    deny_reason         TEXT,
+    kind                TEXT NOT NULL DEFAULT 'create',
+    target_bot_user_id  TEXT,
+    remote_owner_id     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_req_status ON pending_bot_request(status);
+
+CREATE TABLE IF NOT EXISTS bot_import (
+    bot_user_id TEXT PRIMARY KEY REFERENCES bot(bot_user_id),
+    request_id TEXT NOT NULL UNIQUE REFERENCES pending_bot_request(request_id),
+    source TEXT NOT NULL DEFAULT 'imported' CHECK (source = 'imported'),
+    imported_at TEXT NOT NULL,
+    submitted_by TEXT NOT NULL,
+    approved_by TEXT NOT NULL,
+    remote_owner_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS import_submission (
+    request_id TEXT PRIMARY KEY REFERENCES pending_bot_request(request_id),
+    submitted_by TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS operation (
     operation_id TEXT PRIMARY KEY,
@@ -140,17 +157,26 @@ def connect_postgres(
 
 
 def init_schema(conn: DbConn) -> None:
-    if conn.dialect == "sqlite":
-        conn._inner.executescript(SCHEMA_SQL)
-    else:
-        conn.execute("BEGIN")
-        try:
-            for stmt in _SCHEMA_STMTS:
-                conn.execute(stmt)
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+    with transaction(conn):
+        for stmt in _SCHEMA_STMTS:
+            conn.execute(stmt)
+        if conn.dialect == "sqlite":
+            columns = {r["name"] for r in conn.execute("PRAGMA table_info(pending_bot_request)")}
+        else:
+            columns = {
+                r["column_name"]
+                for r in conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name = 'pending_bot_request'"
+                )
+            }
+        for name, definition in (
+            ("kind", "TEXT NOT NULL DEFAULT 'create'"),
+            ("target_bot_user_id", "TEXT"),
+            ("remote_owner_id", "TEXT"),
+        ):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE pending_bot_request ADD COLUMN {name} {definition}")
 
 
 @contextmanager
