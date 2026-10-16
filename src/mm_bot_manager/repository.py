@@ -467,7 +467,7 @@ class MetadataRepo:
     ) -> None:
         """Call inside a transaction so data and audit cannot diverge."""
         if record_type not in {"bot", "request"}:
-            raise MetadataError("Record type must be bot or request.")
+            raise MetadataError("repository.record_type_must_be_bot_or_request")
         table, key = (
             ("bot", "bot_user_id")
             if record_type == "bot"
@@ -475,14 +475,14 @@ class MetadataRepo:
         )
         row = self.conn.execute(f"SELECT * FROM {table} WHERE {key} = ?", (record_id,)).fetchone()
         if row is None:
-            raise MetadataError("Registry record not found.")
+            raise MetadataError("repository.registry_record_not_found")
         if record_type == "request" and row["status"] != "pending":
-            raise MetadataError("Only pending legacy requests may be backfilled.")
+            raise MetadataError("repository.only_pending_legacy_requests_may_be_backfilled")
         old_repo, old_criticality = row["git_repository"], row["criticality"]
         if (old_repo, old_criticality) == (metadata.git_repository, metadata.criticality):
             return
         if only_missing and old_repo is not None and old_criticality is not None:
-            raise MetadataError("Backfill cannot replace existing metadata; use an audited update.")
+            raise MetadataError("repository.backfill_cannot_replace_existing_metadata_use_an")
         self.conn.execute(
             f"UPDATE {table} SET git_repository = ?, criticality = ? WHERE {key} = ?",
             (metadata.git_repository, metadata.criticality, record_id),
@@ -573,3 +573,32 @@ class CatalogRepo:
             [*params, page_size, (page - 1) * page_size],
         ).fetchall()
         return [dict(row) for row in rows], total
+
+
+class PreferenceRepo:
+    def __init__(self, conn: DbConn) -> None:
+        self.conn = conn
+
+    def get(self, user_id: str) -> tuple[str, str]:
+        row = self.conn.execute(
+            "SELECT language, catalog_format FROM user_preference WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return (row["language"], row["catalog_format"]) if row else ("auto", "cards")
+
+    def language(self, user_id: str, language: str) -> None:
+        if language not in {"auto", "en", "ru"}:
+            raise ValueError("Invalid language code")
+        self.conn.execute(
+            "INSERT INTO user_preference (user_id, language) VALUES (?, ?) "
+            "ON CONFLICT (user_id) DO UPDATE SET language = excluded.language",
+            (user_id, language),
+        )
+
+    def format(self, user_id: str, catalog_format: str) -> None:
+        if catalog_format not in {"cards", "table"}:
+            raise ValueError("Invalid catalog format")
+        self.conn.execute(
+            "INSERT INTO user_preference (user_id, catalog_format) VALUES (?, ?) "
+            "ON CONFLICT (user_id) DO UPDATE SET catalog_format = excluded.catalog_format",
+            (user_id, catalog_format),
+        )

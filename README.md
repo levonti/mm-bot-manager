@@ -67,6 +67,7 @@ Create a `.env` file (or export variables directly) and fill it in:
 | `MM_BOT_TOKEN`  | yes      | —                                 | Manager bot access token (WebSocket + posting)            |
 | `MM_APPROVERS`  | no       | empty                             | Comma-separated approver usernames; mandatory for imports |
 | `MM_CATALOG_VIEWERS` | no | empty | Additional usernames with read-only global catalog access in DM |
+| `MM_DEFAULT_LANGUAGE` | no | `en` | Fallback interface language: `en` or `ru` |
 | `MM_VERIFY_SSL` | no       | `true`                            | Set `false` for self-signed certificates                 |
 | `DB_PATH`       | no       | `/data/mm-bot-manager.sqlite3`    | SQLite fallback (lowest database precedence)             |
 | `DB_URL`        | no       | —                                 | PostgreSQL DSN (highest database precedence)             |
@@ -93,6 +94,7 @@ Every command must start with `!`. New bot usernames passed to `!create` must en
 
 | Command                                                                                              | What it does                                                          |
 | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `!language [ru\|en\|auto]` | Show or save your language preference in DM |
 | `!help`                                                                                              | Show the command cheatsheet                                           |
 | `!create <username> --repo <url> --criticality <1|2|3> [--display-name "..."] [--description "..."]`                                    | Create a bot; you become its owner (may require approver approval)    |
 | `!import <username> --repo <url> --criticality <1|2|3>`                                                                     | **DM only:** request an existing bot import; always requires approval |
@@ -183,6 +185,8 @@ the old two-column format is rejected before any Mattermost API calls.
 !catalog
 !catalog --criticality 1 --owner alice --page 2
 !catalog --search alerts
+!catalog --format cards
+!catalog --format table
 !update legacy-integration --repo git@git.example:team/project.git --criticality 2
 ```
 
@@ -198,6 +202,61 @@ an owner or approver in DM and are separate from remote `!update` fields. Every 
 metadata change records old/new values, authenticated actor ID, time and source in
 `metadata_audit`; retries with identical values create no duplicate audit entries.
 An approver may update another owner's registry metadata without gaining remote-edit rights.
+
+### Language and catalog format
+
+Commands, flags, IDs, repository URLs and machine-readable JSON keys stay English.
+All bot-authored messages, help, validation/API errors, status labels, criticality labels
+and notifications support **English and Russian**. User-entered descriptions and reasons
+are preserved, and existing database status/source codes are not translated in storage.
+
+```text
+!language
+!language ru
+!language en
+!language auto
+!catalog --format cards
+!catalog --format table
+```
+
+Language changes are DM-only and saved by immutable Mattermost user ID. `auto` uses
+`GET /users/{id}` to read the user's profile locale (`ru`, `en` and regional variants),
+then falls back to `MM_DEFAULT_LANGUAGE` (default `en`) when unsupported or unavailable.
+Profiles are cached for five minutes in a bounded 1024-entry cache; failures are cached
+for at most 30 seconds and use the previous known language or server fallback. Profile
+requests have a 1.5-second deadline and independent misses do not block other users.
+Explicit language choices require no profile lookup. `!language auto` refreshes the
+profile immediately. A failed profile lookup never grants catalog or management rights.
+
+Catalog **cards** are the default; `--format table` selects a compact Markdown table.
+A valid explicit format choice is saved for that user and applies to later `!catalog`
+commands. Invalid or unauthorised requests change no preferences. Formats retain the
+same filters, ten-record pages, ordering and access rules. Empty results contain no
+empty Markdown table. Tables retain a blank line before their header for Mattermost's
+parser; escaped user data cannot introduce extra columns or formatting.
+
+Preferences survive restarts and renames, and are independent between users. Each
+approver/requester notification is generated in its recipient's language, independently
+of the caller. Concurrent token issuance keeps both language and secret delivery scoped
+to the requesting user's DM. Low-level Mattermost error messages are not echoed; users
+receive translated safe messages and HTTP status codes. Structured log event names,
+CSV headers, identifiers and JSON status values remain stable for tooling.
+
+The three operator CLIs support `--language ru` or `--language en`, including after a
+subcommand, for example:
+
+```bash
+uv run mm-bot-manager-import --language ru mapping.csv --dry-run
+uv run mm-bot-manager-metadata check --language ru
+uv run python -m mm_bot_manager.recovery --language ru --help
+```
+
+Language-specific help and errors work without a connection to Mattermost. CLI JSON
+keys remain unchanged; human guidance such as import `next_step` is translated.
+Translation catalogs live in `src/mm_bot_manager/locales/en.json` and `ru.json`.
+Startup/tests verify identical key sets and placeholders. Missing Russian text falls
+back to English; unsupported profile locales use the configured server fallback.
+Adding a language requires a complete catalog and a corresponding plural rule.
 
 ### Backfilling existing installations
 

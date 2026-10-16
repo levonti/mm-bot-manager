@@ -391,3 +391,19 @@ def test_catalog_viewer_setting_is_passed_from_values_to_application() -> None:
         for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]
     }
     assert env["MM_CATALOG_VIEWERS"]["valueFrom"]["configMapKeyRef"]["key"] == "MM_CATALOG_VIEWERS"
+
+
+def test_default_language_setting_reaches_container_and_rejects_unknown_locale() -> None:
+    resources = render("values-external.yaml", "--set-string", "mattermost.defaultLanguage=ru")
+    config = by_kind(resources, "ConfigMap")[0]
+    assert config["data"]["MM_DEFAULT_LANGUAGE"] == "ru"
+    deployment = by_kind(resources, "Deployment")[0]
+    env = {
+        item["name"]: item
+        for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    assert (
+        env["MM_DEFAULT_LANGUAGE"]["valueFrom"]["configMapKeyRef"]["key"] == "MM_DEFAULT_LANGUAGE"
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        render("values-external.yaml", "--set-string", "mattermost.defaultLanguage=unsupported")

@@ -6,16 +6,16 @@ from .parser import ParsedArgs
 async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     bots = ctx.bot_repo.list_by_owner(ctx.caller_user_id)
     if not bots:
-        return (
-            "You don't own any bots yet. "
-            "Use `!create <username> --repo <url> --criticality <1|2|3>` to make one."
+        return ctx.tr("list.empty")
+    lines = [ctx.tr("list.header"), "|---|---|---|---|"]
+    for bot in bots:
+        critical = (
+            f"{bot.criticality} ({ctx.tr(f'criticality.{bot.criticality}')})"
+            if bot.criticality is not None
+            else ctx.tr("metadata.missing")
         )
-
-    lines = ["| username | description | repository | criticality |", "|---|---|---|---|"]
-    for b in bots:
-        desc = b.description or "—"
         lines.append(
-            f"| `@{b.username}` | {cell(desc)} | {cell(b.git_repository or 'METADATA REQUIRED')} "
-            f"| {b.criticality or 'REQUIRED'} |"
+            f"| `@{bot.username}` | {cell(bot.description or '—')} "
+            f"| {cell(bot.git_repository or ctx.tr('metadata.missing'))} | {critical} |"
         )
     return "\n".join(lines)

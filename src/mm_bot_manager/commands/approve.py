@@ -1,4 +1,6 @@
+from ..i18n import tr
 from ..imports import ImportError, approve_import
+from ..localization import user_language
 from ..metadata import MetadataError, validate_metadata
 from ..mm_client import MattermostError
 from ..operations import OperationError, create_managed_bot
@@ -8,41 +10,48 @@ from .parser import ParsedArgs
 
 async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     if ctx.caller_user_id not in ctx.approver_ids:
-        return "You are not authorised to approve bot requests."
+        return ctx.tr("approve.you_are_not_authorised_to_approve_bot")
     if not args.positional:
-        return "Usage: `!approve <request_id>`"
+        return ctx.tr("approve.usage_approve_request_id")
 
     request_id = args.positional[0]
     req = ctx.pending_repo.get(request_id)
     if req is None:
-        return f"Request `{request_id}` not found."
+        return ctx.tr("approve.request_not_found", v0=request_id)
     if req.status != "pending":
-        return f"Request `{request_id}` is already **{req.status}**."
+        return ctx.tr(
+            "approve.request_is_already", v0=request_id, v1=ctx.tr(f"status.{req.status}")
+        )
     try:
         validate_metadata(req.git_repository, req.criticality)
     except MetadataError:
-        return "Request metadata is incomplete; backfill it before approval."
+        return ctx.tr("approve.request_metadata_is_incomplete_backfill_it_before")
 
     if req.kind == "import":
         try:
             bot_user_id = await approve_import(ctx, req)
         except (ImportError, MattermostError) as exc:
-            return f"Could not import bot: {exc}"
+            return ctx.tr("approve.could_not_import_bot", v0=ctx.error(exc))
         try:
             dm = await ctx.bot_mm.create_direct_channel(ctx.manager_user_id, req.requester_user_id)
             await ctx.bot_mm.create_post(
                 channel_id=dm["id"],
                 message=(
-                    f"Import of `@{req.username}` approved by @{ctx.caller_username} "
-                    f"(request `{request_id}`). Bot id: `{bot_user_id}`. "
-                    "Existing tokens remain unchanged."
+                    tr(
+                        await user_language(ctx, req.requester_user_id),
+                        "notice.import_approved",
+                        username=req.username,
+                        approver=ctx.caller_username,
+                        request_id=request_id,
+                        bot_id=bot_user_id,
+                    )
                 ),
             )
         except Exception:
             pass
-        return f"Approved. Bot `@{req.username}` imported (id `{bot_user_id}`)."
+        return ctx.tr("approve.approved_bot_imported_id", v0=req.username, v1=bot_user_id)
     if req.kind != "create":
-        return "Unknown request kind; no bot will be created."
+        return ctx.tr("approve.unknown_request_kind_no_bot_will_be")
 
     try:
         bot_user_id = await create_managed_bot(
@@ -53,22 +62,26 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
             request=req,
         )
     except OperationError as e:
-        return f"Could not create bot: {e}"
+        return ctx.tr("approve.could_not_create_bot", v0=ctx.error(e))
     except MattermostError as e:
-        return f"Could not create bot: {e}"
+        return ctx.tr("approve.could_not_create_bot", v0=ctx.error(e))
 
     try:
         dm = await ctx.bot_mm.create_direct_channel(ctx.manager_user_id, req.requester_user_id)
         await ctx.bot_mm.create_post(
             channel_id=dm["id"],
             message=(
-                f"Your request to create bot `@{req.username}` has been **approved** "
-                f"by @{ctx.caller_username} (request `{request_id}`).\n"
-                f"Bot id: `{bot_user_id}`. "
-                f"Use `!token create {req.username}` to mint a token."
+                tr(
+                    await user_language(ctx, req.requester_user_id),
+                    "notice.creation_approved",
+                    username=req.username,
+                    approver=ctx.caller_username,
+                    request_id=request_id,
+                    bot_id=bot_user_id,
+                )
             ),
         )
     except Exception:
         pass
 
-    return f"Approved. Bot `@{req.username}` created (id `{bot_user_id}`)."
+    return ctx.tr("approve.approved_bot_created_id", v0=req.username, v1=bot_user_id)

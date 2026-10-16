@@ -12,6 +12,7 @@ services:
       MM_BOT_TOKEN: ${MM_BOT_TOKEN}
       MM_APPROVERS: ${MM_APPROVERS:-}
       MM_CATALOG_VIEWERS: ${MM_CATALOG_VIEWERS:-}
+      MM_DEFAULT_LANGUAGE: ${MM_DEFAULT_LANGUAGE:-en}
       MM_VERIFY_SSL: ${MM_VERIFY_SSL:-true}
       DB_URL: postgresql://${POSTGRES_USER:-mm_bot}:${POSTGRES_PASSWORD:-secret}@postgres/${POSTGRES_DB:-mm_bot_manager}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

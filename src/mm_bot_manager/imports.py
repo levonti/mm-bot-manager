@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from .db import transaction
+from .i18n import UserFacingError, tr
+from .localization import user_language
 from .metadata import validate_metadata
 from .repository import BotRecord, PendingRequestRecord, _now_iso
 
@@ -16,7 +18,7 @@ if TYPE_CHECKING:
     from .commands.context import CommandContext
 
 
-class ImportError(ValueError):
+class ImportError(UserFacingError, ValueError):
     """A request is unsafe, stale, or no longer eligible for import."""
 
 
@@ -35,7 +37,7 @@ class ImportPlan:
 
 def _id(value: str) -> str:
     if not re.fullmatch(r"[a-z0-9]{26}", value):
-        raise ImportError("Expected an immutable Mattermost user ID (26 lowercase letters/digits).")
+        raise ImportError("imports.expected_an_immutable_mattermost_user_id_lowercase")
     return value
 
 
@@ -43,21 +45,19 @@ def check_local(ctx: CommandContext, plan: ImportPlan) -> BotRecord | None:
     existing = ctx.bot_repo.get(plan.bot_user_id)
     if existing is not None:
         if existing.deleted_at is not None:
-            raise ImportError("This bot was removed locally; explicit recovery is required.")
+            raise ImportError("imports.this_bot_was_removed_locally_explicit_recovery")
         if existing.owner_user_id != plan.owner_user_id:
-            raise ImportError(
-                "This bot is already managed by another owner; transfer is not import."
-            )
+            raise ImportError("imports.this_bot_is_already_managed_by_another")
         if existing.username != plan.username:
-            raise ImportError("The local username differs; reconcile the existing record first.")
+            raise ImportError("imports.the_local_username_differs_reconcile_the_existing")
         if (existing.git_repository, existing.criticality) != (
             plan.git_repository,
             plan.criticality,
         ):
-            raise ImportError("Local metadata differs; use an audited update or legacy backfill.")
+            raise ImportError("imports.local_metadata_differs_use_an_audited_update")
     named = ctx.bot_repo.get_by_username(plan.username)
     if named is not None and named.bot_user_id != plan.bot_user_id:
-        raise ImportError("This username is already bound to a different local bot ID.")
+        raise ImportError("imports.this_username_is_already_bound_to_a")
     return existing
 
 
@@ -69,34 +69,34 @@ async def prepare_import(
     criticality: int | str,
 ) -> ImportPlan:
     if not ctx.approver_ids:
-        raise ImportError("Import requires configured MM_APPROVERS and explicit approval.")
+        raise ImportError("import_bot.import_requires_configured_mm_approvers_and_explicit")
     metadata = validate_metadata(git_repository, criticality)
     _id(bot_user_id)
     _id(owner_user_id)
     if bot_user_id == ctx.manager_user_id:
-        raise ImportError("The manager itself cannot be imported.")
+        raise ImportError("imports.the_manager_itself_cannot_be_imported")
     bot = await ctx.mm.get_bot(bot_user_id)
     user = await ctx.mm.get_user(bot_user_id)
     if bot.get("user_id") != bot_user_id or user.get("id") != bot_user_id:
-        raise ImportError("Remote bot identity does not match the requested ID.")
+        raise ImportError("imports.remote_bot_identity_does_not_match_the")
     if user.get("is_bot") is not True or bot.get("delete_at") != 0 or user.get("delete_at") != 0:
-        raise ImportError("Only active bot accounts can be imported.")
+        raise ImportError("imports.only_active_bot_accounts_can_be_imported")
     username = bot.get("username")
     if (
         not isinstance(username, str)
         or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", username)
         or user.get("username") != username
     ):
-        raise ImportError("Remote bot username is invalid or inconsistent.")
+        raise ImportError("imports.remote_bot_username_is_invalid_or_inconsistent")
     if (
         bot.get("system_owned") is True
         or username in {"system", "mattermost", "mattermost-advisor", "playbooks", "boards"}
         or set(str(user.get("roles", "")).split()) != {"system_user"}
     ):
-        raise ImportError("System, protected, or elevated bot accounts cannot be imported.")
+        raise ImportError("imports.system_protected_or_elevated_bot_accounts_cannot")
     remote_owner_id = bot.get("owner_id", "")
     if not isinstance(remote_owner_id, str):
-        raise ImportError("The bot must have a human remote owner.")
+        raise ImportError("imports.the_bot_must_have_a_human_remote")
     _id(remote_owner_id)  # Plugin IDs are not user IDs; also verify the actual user below.
     remote_owner = await ctx.mm.get_user(remote_owner_id)
     owner = await ctx.mm.get_user(owner_user_id)
@@ -108,7 +108,7 @@ async def prepare_import(
             or not isinstance(account.get("username"), str)
             or not account["username"]
         ):
-            raise ImportError("Both the remote and assigned owner must be active human users.")
+            raise ImportError("imports.both_the_remote_and_assigned_owner_must")
     plan = ImportPlan(
         bot_user_id=bot_user_id,
         username=username,
@@ -127,7 +127,7 @@ async def prepare_import(
 def submit_imports(ctx: CommandContext, plans: list[ImportPlan]) -> list[PendingRequestRecord]:
     """Persist a validated batch atomically. Caller holds the instance lock in CLI."""
     if not ctx.approver_ids:
-        raise ImportError("Import requires configured MM_APPROVERS and explicit approval.")
+        raise ImportError("import_bot.import_requires_configured_mm_approvers_and_explicit")
     requests: list[PendingRequestRecord] = []
     with transaction(ctx.bot_repo.conn):
         for plan in plans:
@@ -148,7 +148,7 @@ def submit_imports(ctx: CommandContext, plans: list[ImportPlan]) -> list[Pending
                     or row["git_repository"] != plan.git_repository
                     or row["criticality"] != plan.criticality
                 ):
-                    raise ImportError("A conflicting import request is pending; deny it first.")
+                    raise ImportError("imports.a_conflicting_import_request_is_pending_deny")
                 existing = ctx.pending_repo.get(row["request_id"])
                 assert existing is not None
                 requests.append(existing)
@@ -176,11 +176,11 @@ def submit_imports(ctx: CommandContext, plans: list[ImportPlan]) -> list[Pending
 
 async def approve_import(ctx: CommandContext, request: PendingRequestRecord) -> str:
     if ctx.channel_type != "D":
-        raise ImportError("Import approval is only accepted in a direct message to this manager.")
+        raise ImportError("imports.import_approval_is_only_accepted_in_a")
     if ctx.caller_user_id not in ctx.approver_ids:
-        raise ImportError("Only configured approvers may approve imports.")
+        raise ImportError("imports.only_configured_approvers_may_approve_imports")
     if request.kind != "import" or not request.target_bot_user_id:
-        raise ImportError("Invalid import request; no bot will be created.")
+        raise ImportError("imports.invalid_import_request_no_bot_will_be")
     metadata = validate_metadata(request.git_repository, request.criticality)
     plan = await prepare_import(
         ctx,
@@ -190,13 +190,13 @@ async def approve_import(ctx: CommandContext, request: PendingRequestRecord) -> 
         metadata.criticality,
     )
     if plan.username != request.username or plan.remote_owner_id != request.remote_owner_id:
-        raise ImportError("Remote username or ownership changed; deny and submit a new request.")
+        raise ImportError("imports.remote_username_or_ownership_changed_deny_and")
     with transaction(ctx.bot_repo.conn):
         # CAS and insert share a transaction: denial, retries, and DB failures cannot half-apply.
         if not ctx.pending_repo.resolve(
             request.request_id, status="approved", resolved_by=ctx.caller_user_id
         ):
-            raise ImportError("Request is already being processed or resolved.")
+            raise ImportError("imports.request_is_already_being_processed_or_resolved")
         if check_local(ctx, plan) is None:
             ctx.bot_repo.insert(
                 bot_user_id=plan.bot_user_id,
@@ -225,24 +225,29 @@ async def approve_import(ctx: CommandContext, request: PendingRequestRecord) -> 
                 "SELECT bot_user_id FROM bot_import WHERE bot_user_id = ?", (plan.bot_user_id,)
             ).fetchone()
             if audit is None:
-                raise ImportError("Missing submission audit; import was rolled back.")
+                raise ImportError("imports.missing_submission_audit_import_was_rolled_back")
     return plan.bot_user_id
 
 
 async def notify_import(ctx: CommandContext, request: PendingRequestRecord) -> None:
-    notice = (
-        f"**Existing bot import request** (ID: `{request.request_id}`)\n"
-        f"- bot: `@{request.username}` (`{request.target_bot_user_id}`)\n"
-        f"- assigned owner: @{request.requester_username} (`{request.requester_user_id}`)\n"
-        f"- remote owner: `{request.remote_owner_id}`\n"
-        f"- repository: {request.git_repository}\n"
-        f"- criticality: {request.criticality} (1 critical, 2 important, 3 auxiliary)\n"
-        f"- submitted by: `{ctx.caller_user_id}`\n\n"
-        "Approval grants bot management and token issuance. Existing tokens stay unchanged.\n"
-        f"Reply `!approve {request.request_id}` or `!deny {request.request_id} [reason]`."
-    )
     for approver_id in ctx.approver_ids:
         try:
+            language = await user_language(ctx, approver_id)
+            notice = tr(
+                language,
+                "notice.import",
+                request_id=request.request_id,
+                username=request.username,
+                bot_id=request.target_bot_user_id,
+                owner=request.requester_username,
+                owner_id=request.requester_user_id,
+                remote_owner=request.remote_owner_id,
+                repository=request.git_repository,
+                criticality=(
+                    f"{request.criticality} ({tr(language, f'criticality.{request.criticality}')})"
+                ),
+                submitter=ctx.caller_user_id,
+            )
             dm = await ctx.bot_mm.create_direct_channel(ctx.manager_user_id, approver_id)
             await ctx.bot_mm.create_post(channel_id=dm["id"], message=notice)
         except Exception:

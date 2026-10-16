@@ -667,7 +667,7 @@ def test_cli_entrypoint_defaults_to_preview_and_requires_explicit_submit(
 @pytest.mark.parametrize(
     "error,expected",
     [
-        (ImportError("bad mapping"), "bad mapping"),
+        (ImportError("bad mapping"), "Contact the operator"),
         (MattermostError(403, "credential-secret"), "HTTP 403"),
         (RuntimeError("postgresql://credential-secret"), "instance lock"),
         (OSError("credential-secret"), "instance lock"),

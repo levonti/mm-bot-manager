@@ -1,34 +1,48 @@
+from ..metadata import cell
 from .context import CommandContext
 from .parser import ParsedArgs
 
 
 async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     if not args.positional:
-        return "Usage: `!info <username>`"
+        return ctx.tr("info.usage")
     username = args.positional[0]
     bot = ctx.bot_repo.get_by_owner_and_username(ctx.caller_user_id, username)
     if bot is None:
-        return f"Bot `@{username}` not found or not owned by you."
-
+        return ctx.tr("delete_bot.bot_not_found_or_not_owned_by", v0=username)
     active_tokens = ctx.token_repo.list_active_for_bot(bot.bot_user_id)
     audit = ctx.bot_repo.conn.execute(
         "SELECT imported_at, submitted_by, approved_by FROM bot_import WHERE bot_user_id = ?",
         (bot.bot_user_id,),
     ).fetchone()
-    source = (
-        f"- source: imported at {audit['imported_at']}\n"
-        f"- import submitted by: `{audit['submitted_by']}`\n"
-        f"- import approved by: `{audit['approved_by']}`\n"
-        if audit
-        else "- source: created\n"
+    critical = (
+        f"{bot.criticality} ({ctx.tr(f'criticality.{bot.criticality}')})"
+        if bot.criticality is not None
+        else ctx.tr("metadata.missing")
     )
-    return (
-        f"**@{bot.username}** (`{bot.bot_user_id}`)\n"
-        f"- display name: {bot.display_name or '—'}\n"
-        f"- description: {bot.description or '—'}\n"
-        f"- repository: {bot.git_repository or 'METADATA REQUIRED'}\n"
-        f"- criticality: {bot.criticality or 'REQUIRED'} (1 critical, 2 important, 3 auxiliary)\n"
-        f"- registered locally: {bot.created_at}\n"
-        f"{source}"
-        f"- active tokens tracked by this manager: {len(active_tokens)}"
+    values = [
+        ("display_name", bot.display_name or "—"),
+        ("purpose", bot.description or "—"),
+        ("repository", bot.git_repository or ctx.tr("metadata.missing")),
+        ("criticality", critical),
+        ("registered", bot.created_at),
+        ("source", ctx.tr("source.imported" if audit else "source.created")),
+    ]
+    if audit:
+        values.extend(
+            [
+                ("imported_at", audit["imported_at"]),
+                ("submitted_by", audit["submitted_by"]),
+                ("approved_by", audit["approved_by"]),
+            ]
+        )
+    values.append(("tokens", str(len(active_tokens))))
+    return "\n".join(
+        [
+            f"**@{bot.username}** (`{bot.bot_user_id}`)",
+            *(
+                f"- {ctx.tr(f'label.{label}').lower()}: {cell(value, 2048)}"
+                for label, value in values
+            ),
+        ]
     )

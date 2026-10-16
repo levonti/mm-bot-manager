@@ -5,6 +5,12 @@ from contextlib import contextmanager, suppress
 from typing import Any, Literal
 
 SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS user_preference (
+    user_id TEXT PRIMARY KEY,
+    language TEXT NOT NULL DEFAULT 'auto' CHECK (language IN ('auto', 'en', 'ru')),
+    catalog_format TEXT NOT NULL DEFAULT 'cards' CHECK (catalog_format IN ('cards', 'table'))
+);
+
 CREATE TABLE IF NOT EXISTS bot (
     bot_user_id    TEXT PRIMARY KEY,
     username       TEXT NOT NULL,

@@ -59,6 +59,11 @@ spec:
                 configMapKeyRef:
                   name: {{ include "mm-bot-manager.fullname" . }}
                   key: MM_CATALOG_VIEWERS
+            - name: MM_DEFAULT_LANGUAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mm-bot-manager.fullname" . }}
+                  key: MM_DEFAULT_LANGUAGE
             - name: MM_VERIFY_SSL
               valueFrom:
                 configMapKeyRef:
