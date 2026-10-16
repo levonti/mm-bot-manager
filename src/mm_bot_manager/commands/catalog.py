@@ -36,9 +36,16 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     lines = [
         f"**Bot catalog** — {total} matching bots; page {page}/{pages}.",
         "Criticality: 1 critical · 2 important · 3 auxiliary. Status reflects the local registry.",
-        "| bot | purpose | owner | repository | criticality | source |",
-        "|---|---|---|---|---|---|",
+        "",  # Mattermost's Markdown parser requires a block boundary before a table.
     ]
+    if not bots:
+        return "\n".join([*lines, "No bots on this page."])
+    lines.extend(
+        [
+            "| bot | purpose | owner | repository | criticality | source |",
+            "|---|---|---|---|---|---|",
+        ]
+    )
     for bot in bots:
         lines.append(
             "| "
@@ -55,6 +62,4 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
             )
             + " |"
         )
-    if not bots:
-        lines.append("No bots on this page.")
     return "\n".join(lines)
