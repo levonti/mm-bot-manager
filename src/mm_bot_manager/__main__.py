@@ -14,7 +14,9 @@ from .runtime import instance_lock, process_events
 from .ws_listener import stream_events
 
 
-async def _resolve_approvers(mm: MattermostClient, usernames: list[str]) -> frozenset[str]:
+async def _resolve_approvers(
+    mm: MattermostClient, usernames: list[str], setting: str = "MM_APPROVERS"
+) -> frozenset[str]:
     ids: list[str] = []
     for username in usernames:
         try:
@@ -23,7 +25,7 @@ async def _resolve_approvers(mm: MattermostClient, usernames: list[str]) -> froz
         except MattermostError as e:
             raise SystemExit(
                 f"Cannot resolve approver username '{username}' (API status {e.status}). "
-                "Fix MM_APPROVERS or remove it to disable approval."
+                f"Fix {setting} or remove it to disable the configured access."
             ) from None
     return frozenset(ids)
 
@@ -55,6 +57,9 @@ async def serve(settings: Settings, conn: DbConn) -> None:
         manager_user_id = me["id"]
         manager_username = me["username"]
         approver_ids = await _resolve_approvers(admin_mm, settings.approver_usernames)
+        catalog_ids = await _resolve_approvers(
+            admin_mm, settings.catalog_viewer_usernames, "MM_CATALOG_VIEWERS"
+        )
         log.info("logged_in", user_id=manager_user_id, approver_count=len(approver_ids))
         router = MessageRouter(manager_user_id, manager_username)
         factory = CommandContextFactory(
@@ -65,6 +70,7 @@ async def serve(settings: Settings, conn: DbConn) -> None:
             bot_mm=bot_mm,
             manager_user_id=manager_user_id,
             approver_ids=approver_ids,
+            catalog_viewer_ids=catalog_ids,
         )
         recovery_ctx = factory.build(
             caller_user_id=manager_user_id, caller_username=manager_username, channel_id=""

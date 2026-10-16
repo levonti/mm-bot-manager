@@ -1,4 +1,5 @@
 from ..imports import ImportError, approve_import
+from ..metadata import MetadataError, validate_metadata
 from ..mm_client import MattermostError
 from ..operations import OperationError, create_managed_bot
 from .context import CommandContext
@@ -17,6 +18,10 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
         return f"Request `{request_id}` not found."
     if req.status != "pending":
         return f"Request `{request_id}` is already **{req.status}**."
+    try:
+        validate_metadata(req.git_repository, req.criticality)
+    except MetadataError:
+        return "Request metadata is incomplete; backfill it before approval."
 
     if req.kind == "import":
         try:

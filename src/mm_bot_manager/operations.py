@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, NoReturn
 
 from .db import transaction
 from .logging import get_logger
+from .metadata import validate_metadata
 from .mm_client import MattermostError
 
 if TYPE_CHECKING:
@@ -108,8 +109,14 @@ async def create_managed_bot(
     username: str,
     display_name: str | None,
     description: str | None,
+    git_repository: str | None = None,
+    criticality: int | None = None,
     request: PendingRequestRecord | None = None,
 ) -> str:
+    metadata = validate_metadata(
+        request.git_repository if request else git_repository,
+        request.criticality if request else criticality,
+    )
     request_id = request.request_id if request else None
     with transaction(ctx.operation_repo.conn):
         if ctx.operation_repo.active_for("bot_create", username):
@@ -137,6 +144,8 @@ async def create_managed_bot(
                 description=description,
                 owner_user_id=request.requester_user_id if request else ctx.caller_user_id,
                 owner_username=request.requester_username if request else ctx.caller_username,
+                git_repository=metadata.git_repository,
+                criticality=metadata.criticality,
             )
             if request_id and not ctx.pending_repo.resolve(
                 request_id,

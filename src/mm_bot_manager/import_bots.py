@@ -20,28 +20,32 @@ from .imports import (
     prepare_import,
     submit_imports,
 )
+from .metadata import MetadataError, validate_metadata
 from .mm_client import MattermostClient, MattermostError
 from .repository import BotRepo, OperationRepo, PendingRequestRepo, TokenRepo
 from .runtime import instance_lock
 
 
-def read_mapping(path: Path) -> list[tuple[str, str]]:
+def read_mapping(path: Path) -> list[tuple[str, str, str, int]]:
     with path.open(newline="", encoding="utf-8-sig") as stream:
         reader = csv.DictReader(stream, strict=True)
-        if reader.fieldnames != ["bot_user_id", "owner_user_id"]:
-            raise ImportError("CSV header must be exactly bot_user_id,owner_user_id.")
-        rows: list[tuple[str, str]] = []
+        if reader.fieldnames != ["bot_user_id", "owner_user_id", "git_repository", "criticality"]:
+            raise ImportError(
+                "CSV header must be bot_user_id,owner_user_id,git_repository,criticality."
+            )
+        rows: list[tuple[str, str, str, int]] = []
         seen: set[str] = set()
         for row in reader:
             if len(rows) >= 1000:
                 raise ImportError("A batch may contain at most 1000 bots.")
             if None in row or any(value is None or not value.strip() for value in row.values()):
-                raise ImportError("Every CSV row must contain exactly two nonempty user IDs.")
+                raise ImportError("Every CSV row must contain four nonempty fields.")
             bot_id, owner_id = row["bot_user_id"].strip(), row["owner_user_id"].strip()
             if bot_id in seen:
                 raise ImportError("Duplicate bot IDs in CSV; use one explicit owner per bot.")
             seen.add(bot_id)
-            rows.append((bot_id, owner_id))
+            metadata = validate_metadata(row["git_repository"], row["criticality"])
+            rows.append((bot_id, owner_id, metadata.git_repository, metadata.criticality))
         if not rows:
             raise ImportError("The CSV contains no bots.")
         return rows
@@ -64,10 +68,13 @@ def _preview_database(settings: Settings) -> DbConn:
 
 
 async def process_mapping(
-    ctx: CommandContext, rows: list[tuple[str, str]], *, submit: bool
+    ctx: CommandContext, rows: list[tuple[str, str, str, int]], *, submit: bool
 ) -> tuple[list[ImportPlan], list[str]]:
     # Validate the entire batch before the first durable write or notification.
-    plans = [await prepare_import(ctx, bot_id, owner_id) for bot_id, owner_id in rows]
+    plans = [
+        await prepare_import(ctx, bot_id, owner_id, repo, crit)
+        for bot_id, owner_id, repo, crit in rows
+    ]
     requests = submit_imports(ctx, plans) if submit else []
     for request in requests:
         await notify_import(ctx, request)
@@ -87,7 +94,7 @@ async def run_import(settings: Settings, path: Path, *, submit: bool = False) ->
 
 
 async def _run_connected(
-    settings: Settings, conn: DbConn, rows: list[tuple[str, str]], *, submit: bool
+    settings: Settings, conn: DbConn, rows: list[tuple[str, str, str, int]], *, submit: bool
 ) -> int:
     async with (
         MattermostClient(
@@ -127,6 +134,8 @@ async def _run_connected(
                             "remote_owner_id": p.remote_owner_id,
                             "owner_user_id": p.owner_user_id,
                             "owner_username": p.owner_username,
+                            "git_repository": p.git_repository,
+                            "criticality": p.criticality,
                             "locally_managed": check_local(ctx, p) is not None,
                         }
                         for p in plans
@@ -142,14 +151,16 @@ async def _run_connected(
 
 def run() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mapping", type=Path, help="CSV: bot_user_id,owner_user_id")
+    parser.add_argument(
+        "mapping", type=Path, help="CSV: bot_user_id,owner_user_id,git_repository,criticality"
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="read-only preview (default)")
     mode.add_argument("--submit", action="store_true", help="submit requests; does NOT approve")
     args = parser.parse_args()
     try:
         result = asyncio.run(run_import(load_settings(), args.mapping, submit=args.submit))
-    except (ImportError, csv.Error) as exc:
+    except (ImportError, MetadataError, csv.Error) as exc:
         parser.exit(2, f"Import rejected: {exc}\n")
     except MattermostError as exc:
         parser.exit(2, f"Mattermost validation failed (HTTP {exc.status}); nothing approved.\n")

@@ -79,6 +79,19 @@ CREATE TABLE IF NOT EXISTS processed_post (
     created_at TEXT NOT NULL,
     finished_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS metadata_audit (
+    audit_id TEXT PRIMARY KEY,
+    record_type TEXT NOT NULL CHECK (record_type IN ('bot', 'request')),
+    record_id TEXT NOT NULL,
+    old_git_repository TEXT,
+    old_criticality INTEGER,
+    git_repository TEXT NOT NULL CHECK (length(trim(git_repository)) > 0),
+    criticality INTEGER NOT NULL CHECK (criticality BETWEEN 1 AND 3),
+    changed_by TEXT NOT NULL,
+    source TEXT NOT NULL,
+    changed_at TEXT NOT NULL
+);
 """
 
 _SCHEMA_STMTS = [s.strip() for s in SCHEMA_SQL.split(";") if s.strip()]
@@ -177,6 +190,61 @@ def init_schema(conn: DbConn) -> None:
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE pending_bot_request ADD COLUMN {name} {definition}")
+        for table in ("bot", "pending_bot_request"):
+            if conn.dialect == "sqlite":
+                names = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            else:
+                names = {
+                    r["column_name"]
+                    for r in conn.execute(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() AND table_name = ?",
+                        (table,),
+                    )
+                }
+            for name, definition in (
+                ("git_repository", "TEXT CHECK (length(trim(git_repository)) > 0)"),
+                ("criticality", "INTEGER CHECK (criticality BETWEEN 1 AND 3)"),
+            ):
+                if name not in names:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+            _require_metadata(conn, table)
+
+
+def _require_metadata(conn: DbConn, table: str) -> None:
+    # Existing rows retain NULL until explicit backfill. New rows cannot omit attributes;
+    # updates cannot clear them. Status-only recovery/denial of legacy requests still works.
+    invalid = (
+        "NEW.git_repository IS NULL OR length(trim(NEW.git_repository)) = 0 "
+        "OR NEW.criticality IS NULL OR NEW.criticality NOT IN (1, 2, 3)"
+    )
+    if conn.dialect == "sqlite":
+        invalid += " OR typeof(NEW.criticality) != 'integer'"
+        for name, event in (
+            ("insert", "INSERT"),
+            ("update", "UPDATE OF git_repository, criticality"),
+        ):
+            conn.execute(
+                f"CREATE TRIGGER IF NOT EXISTS require_{table}_metadata_{name} "
+                f"BEFORE {event} ON {table} WHEN {invalid} "
+                "BEGIN SELECT RAISE(ABORT, 'Required bot metadata is missing or invalid'); END"
+            )
+    else:
+        conn.execute(
+            "CREATE OR REPLACE FUNCTION require_bot_metadata() RETURNS trigger AS $$ "
+            f"BEGIN IF {invalid} THEN "
+            "RAISE EXCEPTION 'Required bot metadata is missing or invalid'; "
+            "END IF; RETURN NEW; END; $$ LANGUAGE plpgsql"
+        )
+        for name, event in (
+            ("insert", "INSERT"),
+            ("update", "UPDATE OF git_repository, criticality"),
+        ):
+            conn.execute(f"DROP TRIGGER IF EXISTS require_{table}_metadata_{name} ON {table}")
+            conn.execute(
+                f"CREATE TRIGGER require_{table}_metadata_{name} BEFORE {event} ON {table} "
+                "FOR EACH ROW EXECUTE FUNCTION require_bot_metadata()"
+            )
 
 
 @contextmanager

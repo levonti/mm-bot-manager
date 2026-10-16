@@ -7,6 +7,7 @@ metadata:
 data:
   MM_URL: {{ .Values.mattermost.url | quote }}
   MM_APPROVERS: {{ .Values.mattermost.approvers | quote }}
+  MM_CATALOG_VIEWERS: {{ .Values.mattermost.catalogViewers | default "" | quote }}
   MM_VERIFY_SSL: {{ .Values.mattermost.verifySSL | toString | quote }}
   LOG_LEVEL: {{ .Values.logLevel | quote }}
   HEALTH_HOST: {{ .Values.health.host | quote }}

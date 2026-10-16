@@ -109,6 +109,7 @@ class CommandContextFactory:
         bot_mm: MattermostClient,
         manager_user_id: str,
         approver_ids: frozenset[str],
+        catalog_viewer_ids: frozenset[str] = frozenset(),
     ) -> None:
         self._bot_repo = bot_repo
         self._token_repo = token_repo
@@ -117,6 +118,7 @@ class CommandContextFactory:
         self.bot_mm = bot_mm
         self._manager_user_id = manager_user_id
         self._approver_ids = approver_ids
+        self._catalog_viewer_ids = catalog_viewer_ids
         self.operation_repo = OperationRepo(bot_repo.conn)
         self.post_repo = PostRepo(bot_repo.conn)
 
@@ -141,4 +143,5 @@ class CommandContextFactory:
             approver_ids=self._approver_ids,
             operation_repo=self.operation_repo,
             channel_type=channel_type,
+            catalog_viewer_ids=self._catalog_viewer_ids,
         )

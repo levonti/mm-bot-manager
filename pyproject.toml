@@ -17,6 +17,7 @@ dependencies = [
 [project.scripts]
 mm-bot-manager = "mm_bot_manager.__main__:run"
 mm-bot-manager-import = "mm_bot_manager.import_bots:run"
+mm-bot-manager-metadata = "mm_bot_manager.metadata_migration:run"
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.1"]

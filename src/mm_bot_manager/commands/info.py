@@ -26,6 +26,8 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
         f"**@{bot.username}** (`{bot.bot_user_id}`)\n"
         f"- display name: {bot.display_name or '—'}\n"
         f"- description: {bot.description or '—'}\n"
+        f"- repository: {bot.git_repository or 'METADATA REQUIRED'}\n"
+        f"- criticality: {bot.criticality or 'REQUIRED'} (1 critical, 2 important, 3 auxiliary)\n"
         f"- registered locally: {bot.created_at}\n"
         f"{source}"
         f"- active tokens tracked by this manager: {len(active_tokens)}"

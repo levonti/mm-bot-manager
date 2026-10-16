@@ -66,6 +66,7 @@ Create a `.env` file (or export variables directly) and fill it in:
 | `MM_TOKEN`      | yes      | —                                 | system_admin PAT (bot management API)                    |
 | `MM_BOT_TOKEN`  | yes      | —                                 | Manager bot access token (WebSocket + posting)            |
 | `MM_APPROVERS`  | no       | empty                             | Comma-separated approver usernames; mandatory for imports |
+| `MM_CATALOG_VIEWERS` | no | empty | Additional usernames with read-only global catalog access in DM |
 | `MM_VERIFY_SSL` | no       | `true`                            | Set `false` for self-signed certificates                 |
 | `DB_PATH`       | no       | `/data/mm-bot-manager.sqlite3`    | SQLite fallback (lowest database precedence)             |
 | `DB_URL`        | no       | —                                 | PostgreSQL DSN (highest database precedence)             |
@@ -93,8 +94,8 @@ Every command must start with `!`. New bot usernames passed to `!create` must en
 | Command                                                                                              | What it does                                                          |
 | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | `!help`                                                                                              | Show the command cheatsheet                                           |
-| `!create <username> [--display-name "..."] [--description "..."]`                                    | Create a bot; you become its owner (may require approver approval)    |
-| `!import <existing-bot-username>`                                                                     | **DM only:** request an existing bot import; always requires approval |
+| `!create <username> --repo <url> --criticality <1|2|3> [--display-name "..."] [--description "..."]`                                    | Create a bot; you become its owner (may require approver approval)    |
+| `!import <username> --repo <url> --criticality <1|2|3>`                                                                     | **DM only:** request an existing bot import; always requires approval |
 | `!list`                                                                                              | List bots you own                                                     |
 | `!info <username>`                                                                                   | Details on a bot you own                                              |
 | `!update <username> [--username "..."] [--display-name "..."] [--description "..."]`                 | Update attributes                                                     |
@@ -107,7 +108,7 @@ Every command must start with `!`. New bot usernames passed to `!create` must en
 
 ## Importing existing bots
 
-In a DM, send `!import legacy-integration` (legacy names need no `-bot` suffix).
+In a DM, send `!import legacy-integration --repo https://git.example/team/project --criticality 1` (legacy names need no `-bot` suffix).
 The requester becomes the proposed **local** owner. A configured `MM_APPROVERS`
 user reviews the bot ID, current remote owner and proposed local owner, then sends
 `!approve <request_id>` in a DM, or `!deny <request_id> [reason]`.
@@ -132,9 +133,9 @@ Use the manager's environment and database. Prepare UTF-8 CSV with immutable
 Mattermost user IDs (26 lowercase letters/digits), one explicit local human owner per bot:
 
 ```csv
-bot_user_id,owner_user_id
-bbbbbbbbbbbbbbbbbbbbbbbbbb,aaaaaaaaaaaaaaaaaaaaaaaaaa
-cccccccccccccccccccccccccc,dddddddddddddddddddddddddd
+bot_user_id,owner_user_id,git_repository,criticality
+bbbbbbbbbbbbbbbbbbbbbbbbbb,aaaaaaaaaaaaaaaaaaaaaaaaaa,https://git.example/team/project,1
+cccccccccccccccccccccccccc,dddddddddddddddddddddddddd,git@git.example:team/alerts.git,2
 ```
 
 ```bash
@@ -164,6 +165,82 @@ are independent. There is no CLI switch that bypasses this confirmation.
 Startup/submission applies additive SQLite/PostgreSQL schema migrations, preserving
 existing creation requests, bots and token records. Import audit data is committed
 with the local binding and approval; failures roll back locally without remote cleanup.
+
+## Inventory attributes and global catalog
+
+Every new bot and request must include `--repo` and `--criticality`. Criticality is:
+**1 = critical**, **2 = important**, **3 = auxiliary**. HTTPS, `ssh://git@host/...`
+and `git@host:group/repository.git` addresses are accepted; repository URLs are
+validated locally and never fetched. Embedded credentials, query strings, fragments
+and whitespace are rejected. Multiple bots can share a repository.
+
+Approvers see the exact attributes before approval. Repeating an import with different
+attributes requires a new request or an audited registry update, rather than silently
+changing existing ownership or metadata. Bulk import CSV requires all four columns;
+the old two-column format is rejected before any Mattermost API calls.
+
+```text
+!catalog
+!catalog --criticality 1 --owner alice --page 2
+!catalog --search alerts
+!update legacy-integration --repo git@git.example:team/project.git --criticality 2
+```
+
+`!catalog` is DM-only and available to `MM_APPROVERS` plus `MM_CATALOG_VIEWERS`.
+It lists active local registry entries with purpose, owner, repository, criticality
+and registration source. Filters are combined, search is case-insensitive and literal,
+and pages contain at most ten bots ordered by criticality, username and immutable ID.
+The catalog reflects local registrations; it does not poll remote account state.
+`!list` and `!info` include the new attributes for your own bots.
+
+Catalog readers receive no management or token privileges. Registry updates require
+an owner or approver in DM and are separate from remote `!update` fields. Every actual
+metadata change records old/new values, authenticated actor ID, time and source in
+`metadata_audit`; retries with identical values create no duplicate audit entries.
+An approver may update another owner's registry metadata without gaining remote-edit rights.
+
+### Backfilling existing installations
+
+Startup adds columns without guessing repository URLs or criticality. Existing incomplete
+entries remain visible as `METADATA REQUIRED`; old pending requests cannot be approved
+until filled. New rows cannot omit the attributes and existing attributes cannot be
+cleared: repositories validate values and both database backends enforce CHECK constraints
+and insert/update triggers. Status-only denial and operation recovery of legacy requests
+continue to work. No database is modified merely by upgrading the source checkout.
+
+Use the same database configuration as the manager:
+
+```bash
+# Read-only report; exit status 2 means there are missing attributes.
+uv run mm-bot-manager-metadata check
+
+# Export missing bot records (including archived ones) and pending requests.
+# Creates a new file; refuses to overwrite an existing file.
+uv run mm-bot-manager-metadata export metadata.csv
+
+# Fill every empty repository/criticality value in the exported CSV, then preview.
+uv run mm-bot-manager-metadata backfill metadata.csv --dry-run
+
+# Stop the manager before applying: the command acquires its exclusive instance lock.
+uv run mm-bot-manager-metadata backfill metadata.csv --apply
+uv run mm-bot-manager-metadata check
+```
+
+The module equivalent is `python -m mm_bot_manager.metadata_migration`. The CSV header is
+`record_type,record_id,git_repository,criticality`; record types are `bot` and `request`.
+Dry-run is the default for `backfill`, reports how many missing records remain, and
+performs no database/schema writes or API calls, including against pre-upgrade schemas.
+`--apply` requires the CSV to cover **all** missing bot and pending-request metadata,
+validates all targets, then fills and audits the batch atomically. It authenticates the
+submitter through `MM_TOKEN` using `GET /users/me`; all token records and remote bots
+stay unchanged. A failure rolls back every metadata/audit update. Schema upgrades
+performed by `--apply` persist separately from the metadata transaction.
+
+Backfill cannot replace completed metadata or edit approved/denied request history.
+Identical retries are no-ops. Old pending requests remain pending for explicit review
+and approval after their attributes have been filled; review the CSV before approval.
+After backfill, `check` must report an empty missing list and exit zero. Keep the reviewed
+CSV with your normal operator records; it must contain no credentials.
 
 ## Running locally
 

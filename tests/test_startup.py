@@ -36,6 +36,8 @@ async def test_startup_recovers_before_consuming_events_and_uses_separate_client
         description=None,
         owner_user_id="alice",
         owner_username="alice",
+        git_repository="https://git.example/team/project",
+        criticality=2,
     )
     TokenRepo(conn).record(token_id="abandoned-token", bot_user_id="bot-0", description="test")
     operations = OperationRepo(conn)
@@ -128,3 +130,59 @@ def test_configuration_bounds_and_repr_hide_credentials(tmp_path):
         settings(tmp_path, shutdown_timeout=0)
     assert cfg.mm_ws_url == "wss://mm.example/api/v4/websocket"
     assert cfg.mm_rest_base == "https://mm.example/api/v4"
+
+
+@respx.mock
+async def test_catalog_readers_resolve_to_ids_and_receive_catalog_through_dispatcher(
+    tmp_path, monkeypatch
+):
+    cfg = settings(tmp_path, mm_catalog_viewers="reader")
+    cfg.health_port = 0
+    conn = connect(cfg.db_path)
+    init_schema(conn)
+    BotRepo(conn).insert(
+        bot_user_id="registered",
+        username="demo-bot",
+        display_name=None,
+        description="alerts",
+        owner_user_id="owner",
+        owner_username="owner",
+        git_repository="https://git.example/team/repo",
+        criticality=1,
+    )
+    respx.get("https://mm.example/api/v4/users/me").mock(
+        return_value=httpx.Response(200, json={"id": "mgr", "username": "manager"})
+    )
+    reader = respx.get("https://mm.example/api/v4/users/username/reader").mock(
+        return_value=httpx.Response(200, json={"id": "reader-id", "username": "reader"})
+    )
+    post = respx.post("https://mm.example/api/v4/posts").mock(
+        return_value=httpx.Response(201, json={"id": "reply"})
+    )
+
+    async def stream(*args, **kwargs):
+        yield {
+            "event": "posted",
+            "data": {
+                "channel_type": "D",
+                "sender_name": "@reader",
+                "post": json.dumps(
+                    {
+                        "id": "reader-post",
+                        "user_id": "reader-id",
+                        "channel_id": "dm",
+                        "message": "!catalog",
+                    }
+                ),
+            },
+        }
+
+    monkeypatch.setattr(app, "stream_events", stream)
+    try:
+        await app.serve(cfg, conn)
+        assert reader.calls.last.request.headers["authorization"] == "Bearer test-admin"
+        message = json.loads(post.calls.last.request.content)["message"]
+        assert "Bot catalog" in message and "demo-bot" in message
+        assert "https://git.example/team/repo" in message
+    finally:
+        conn.close()

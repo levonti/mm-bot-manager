@@ -44,9 +44,10 @@ class Settings(BaseSettings):
     health_port: int = Field(default=8080, ge=1, le=65535)
     log_level: str = Field(default="INFO")
     mm_verify_ssl: bool = Field(default=True)
-    # Comma-separated Mattermost usernames of users who can approve bot creation.
-    # If empty, bot creation is immediate (no approval required).
+    # Approvers can review creation/import requests and read the global catalog.
+    # If empty, creation is immediate and imports are disabled.
     mm_approvers: str = Field(default="")
+    mm_catalog_viewers: str = Field(default="")
     max_workers: int = Field(default=4, ge=1, le=32)
     event_queue_size: int = Field(default=100, ge=1, le=10000)
     shutdown_timeout: float = Field(default=30, ge=1, le=300)
@@ -54,6 +55,10 @@ class Settings(BaseSettings):
     @property
     def approver_usernames(self) -> list[str]:
         return [u.strip() for u in self.mm_approvers.split(",") if u.strip()]
+
+    @property
+    def catalog_viewer_usernames(self) -> list[str]:
+        return [u.strip() for u in self.mm_catalog_viewers.split(",") if u.strip()]
 
     @property
     def mm_rest_base(self) -> str:
