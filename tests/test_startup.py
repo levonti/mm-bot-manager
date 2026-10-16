@@ -26,6 +26,7 @@ async def test_startup_recovers_before_consuming_events_and_uses_separate_client
     tmp_path, monkeypatch
 ):
     cfg = settings(tmp_path)
+    cfg.health_port = 0  # Let the test listener select an ephemeral port.
     conn = connect(cfg.db_path)
     init_schema(conn)
     BotRepo(conn).insert(

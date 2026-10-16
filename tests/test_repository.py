@@ -95,3 +95,17 @@ def test_token_lifecycle(repos):
     rec = tokens.get("tok1")
     assert rec is not None
     assert rec.revoked_at is not None
+
+
+def test_ping_reports_healthy_connection() -> None:
+    conn = connect(":memory:")
+    try:
+        assert conn.ping() is True
+    finally:
+        conn.close()
+
+
+def test_ping_hides_database_errors() -> None:
+    conn = connect(":memory:")
+    conn.close()
+    assert conn.ping() is False

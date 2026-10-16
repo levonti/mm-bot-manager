@@ -67,12 +67,23 @@ Create a `.env` file (or export variables directly) and fill it in:
 | `MM_BOT_TOKEN`  | yes      | —                                 | Manager bot access token (WebSocket + posting)            |
 | `MM_APPROVERS`  | no       | empty                             | Comma-separated usernames who approve `!create`          |
 | `MM_VERIFY_SSL` | no       | `true`                            | Set `false` for self-signed certificates                 |
-| `DB_PATH`       | no       | `/data/mm-bot-manager.sqlite3`    | SQLite file path (ignored when `DB_URL` is set)          |
-| `DB_URL`        | no       | —                                 | PostgreSQL DSN, e.g. `postgresql://user:pass@host/db`    |
+| `DB_PATH`       | no       | `/data/mm-bot-manager.sqlite3`    | SQLite fallback (lowest database precedence)             |
+| `DB_URL`        | no       | —                                 | PostgreSQL DSN (highest database precedence)             |
+| `DB_HOST`       | no       | —                                 | PostgreSQL host; requires all component values below     |
+| `DB_PORT`       | no       | `5432`                            | PostgreSQL port for component configuration              |
+| `DB_NAME`       | no       | —                                 | PostgreSQL database name                                 |
+| `DB_USER`       | no       | —                                 | PostgreSQL user                                          |
+| `DB_PASSWORD`   | no       | —                                 | PostgreSQL password                                      |
+| `HEALTH_HOST`   | no       | `127.0.0.1`                       | Local health listener bind address                       |
+| `HEALTH_PORT`   | no       | `8080`                            | Local health listener port                               |
 | `LOG_LEVEL`     | no       | `INFO`                            | `DEBUG` / `INFO` / `WARNING` / `ERROR`                   |
 | `MAX_WORKERS` | no | `4` | Concurrent command handlers (1–32) |
 | `EVENT_QUEUE_SIZE` | no | `100` | Bounded event queue (1–10000) |
 | `SHUTDOWN_TIMEOUT` | no | `30` | Seconds to drain commands before cancellation (1–300) |
+
+Database selection precedence is `DB_URL`, then the complete component PostgreSQL
+configuration (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`), then
+`DB_PATH` for SQLite.
 
 ## Commands
 
@@ -121,6 +132,13 @@ docker compose logs -f
 
 `POSTGRES_PASSWORD` defaults to `secret`; override it in `.env` for anything
 beyond local testing.
+
+## Kubernetes
+
+For Kubernetes `>= 1.21.1`, Helm 3 installation, pre-created Secrets, external or
+single-instance internal PostgreSQL, Longhorn/local-path storage considerations,
+Harbor in a closed contour, backup, restore, upgrade, and removal procedures, see
+the [Kubernetes deployment runbook](docs/kubernetes.md).
 
 ## Development
 

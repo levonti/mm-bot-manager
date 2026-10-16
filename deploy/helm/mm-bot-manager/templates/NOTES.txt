@@ -1,0 +1,7 @@
+The mm-bot-manager Pod runs without a Service or Ingress.
+
+Check its status:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/name={{ include "mm-bot-manager.name" . }}
+
+View logs:
+  kubectl -n {{ .Release.Namespace }} logs deployment/{{ include "mm-bot-manager.fullname" . }}

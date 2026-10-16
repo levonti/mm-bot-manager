@@ -1,0 +1,17 @@
+app:
+  existingSecret: mm-bot-manager-app
+mattermost:
+  url: https://mm.internal.example
+database:
+  mode: internal
+  internal:
+    auth:
+      existingSecret: mm-bot-manager-postgresql
+    storage:
+      storageClass: local-path
+      size: 4Gi
+    backup:
+      storageClass: local-path
+      size: 2Gi
+      schedule: "0 2 * * *"
+      retentionDays: 7

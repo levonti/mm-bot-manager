@@ -1,0 +1,512 @@
+# Kubernetes deployment runbook
+
+This runbook installs `mm-bot-manager` with Helm 3 on Kubernetes `>= 1.21.1`.
+It supports an external PostgreSQL server or one in-cluster PostgreSQL StatefulSet
+with persistent logical backups. The chart has no external Helm dependencies, so
+it is usable in a closed contour once its images are available locally.
+
+The application keeps an outbound Mattermost WebSocket connection. It does not
+serve an end-user HTTP application, therefore it intentionally has no application
+Service and no Ingress. An ingress-nginx installation is not used by this chart.
+Port 8080 is only a Pod-local health endpoint for Kubernetes probes.
+
+## 1. Prerequisites and profiles
+
+Install Helm 3 and ensure the target cluster is Kubernetes `1.21.1` or newer.
+Choose one of these profiles before creating database credentials:
+
+| Profile | Values file | Database resources | Storage guidance |
+| --- | --- | --- | --- |
+| External PostgreSQL | `examples/values-external.yaml` | Application Deployment only | Managed by the external database operator. |
+| Internal production PostgreSQL | `examples/values-internal-longhorn.yaml` | Application Deployment, one PostgreSQL StatefulSet, data PVC, backup PVC and CronJob | Use `longhorn` for both PVCs. |
+| Internal single-node/test | `examples/values-internal-local-path.yaml` | Same as internal production | `local-path` is node-local and is not disaster recovery. |
+| Closed contour | `examples/values-harbor.yaml` | Internal profile with images from Harbor | Use after mirroring both application and PostgreSQL images. |
+
+The internal mode has exactly one PostgreSQL replica and is not an HA database.
+All Helm values are non-secret; Kubernetes Secrets must be created before install.
+
+## 2. Create namespace and application Secret
+
+Copy the example, replace both `CHANGE_THIS_...` values in the local copy only,
+and never commit or paste those values into Helm values, shell history, tickets,
+or logs.
+
+```bash
+kubectl create namespace mm-bot-manager
+
+cp deploy/helm/mm-bot-manager/examples/app-secret.env.example app-secret.env
+chmod 0600 app-secret.env
+kubectl -n mm-bot-manager create secret generic mm-bot-manager-app \
+  --from-env-file=app-secret.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The Secret must contain these exact keys: `MM_TOKEN` (a system-admin Mattermost
+PAT) and `MM_BOT_TOKEN` (the manager bot PAT). Check only the key names; this
+does not decode or print any secret values:
+
+```bash
+kubectl -n mm-bot-manager get secret mm-bot-manager-app \
+  -o go-template='{{range $key, $value := .data}}{{printf "%s\n" $key}}{{end}}'
+```
+
+## 3. Create the database Secret
+
+Use exactly one database mode for a release.
+
+### External PostgreSQL
+
+Fill `DB_URL` with the complete TLS-appropriate PostgreSQL connection URL supplied
+by the database operator. The URL is the only required key in the Secret.
+
+```bash
+cp deploy/helm/mm-bot-manager/examples/external-db-secret.env.example \
+  external-db-secret.env
+chmod 0600 external-db-secret.env
+kubectl -n mm-bot-manager create secret generic mm-bot-manager-external-db \
+  --from-env-file=external-db-secret.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+### Internal PostgreSQL
+
+Fill the local copy with a strong unique password. The three fixed keys are
+`POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`. The application reads
+the latter three values as component database settings; it does not need a
+constructed `DB_URL` in internal mode.
+
+```bash
+cp deploy/helm/mm-bot-manager/examples/internal-db-secret.env.example \
+  internal-db-secret.env
+chmod 0600 internal-db-secret.env
+kubectl -n mm-bot-manager create secret generic mm-bot-manager-postgresql \
+  --from-env-file=internal-db-secret.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+For either Secret, list keys without disclosing values by substituting its name in
+the following command:
+
+```bash
+kubectl -n mm-bot-manager get secret mm-bot-manager-app \
+  -o go-template='{{range $key, $value := .data}}{{printf "%s\n" $key}}{{end}}'
+```
+
+Filled `*.env` working copies are ignored by Git. Keep them at mode `0600` and,
+after creation, delete them or move them to the organization's approved secret
+vault. Do not leave copies in the deployment directory.
+
+### Rotation
+
+For an application token or external `DB_URL`, update the protected local env
+file and repeat the same `kubectl create secret ... --dry-run=client -o yaml |
+kubectl apply -f -` command for that Secret. Then restart and wait for the
+application Pod:
+
+```bash
+kubectl -n mm-bot-manager rollout restart deployment/mm-bot-manager
+kubectl -n mm-bot-manager rollout status deployment/mm-bot-manager
+```
+
+Changing only `POSTGRES_PASSWORD` in the internal Secret does **not** change the
+password stored by PostgreSQL. Coordinate an `ALTER ROLE` with the database
+administrator first, apply the matching Secret, and restart the PostgreSQL
+StatefulSet and application during a maintenance window. Verify recovery before
+declaring the rotation complete.
+
+## 4. Harbor and closed-contour preparation
+
+For a connected staging environment, build and mirror both internal-mode images
+to Harbor. External mode needs only the application image.
+
+```bash
+docker build -t harbor.internal.example/platform/mm-bot-manager:0.1.0 .
+docker push harbor.internal.example/platform/mm-bot-manager:0.1.0
+docker pull postgres:15.18-alpine3.24
+docker tag postgres:15.18-alpine3.24 \
+  harbor.internal.example/library/postgres:15.18-alpine3.24
+docker push harbor.internal.example/library/postgres:15.18-alpine3.24
+```
+
+For physically separated contours, export the already-mirrored images, transfer
+the tarball and checksum through the approved channel, verify the checksum in the
+destination, load the images into the destination registry workflow, and inspect
+the resolved digest before publishing or deploying it:
+
+```bash
+docker save \
+  --output mm-bot-manager-images.tar \
+  harbor.internal.example/platform/mm-bot-manager:0.1.0 \
+  harbor.internal.example/library/postgres:15.18-alpine3.24
+sha256sum mm-bot-manager-images.tar >mm-bot-manager-images.tar.sha256
+sha256sum --check mm-bot-manager-images.tar.sha256
+docker load --input mm-bot-manager-images.tar
+docker image inspect harbor.internal.example/platform/mm-bot-manager:0.1.0 \
+  --format '{{json .RepoDigests}}'
+```
+
+Create the Harbor pull Secret without placing the password in the command line or
+shell history. Enter the password at the hidden prompt. The Harbor values profile
+already refers to this Secret as `harbor-pull`.
+
+```bash
+read -r HARBOR_USERNAME
+read -rs HARBOR_PASSWORD
+kubectl -n mm-bot-manager create secret docker-registry harbor-pull \
+  --docker-server=harbor.internal.example \
+  --docker-username="$HARBOR_USERNAME" \
+  --docker-password="$HARBOR_PASSWORD"
+unset HARBOR_PASSWORD
+```
+
+### Rotate the Harbor pull Secret
+
+Update the pull Secret in place; do not delete it first, because that creates a
+window in which newly scheduled Pods cannot authenticate to Harbor. Run the
+following in Bash, substituting the namespace, release, Secret name, and Harbor
+host for the installed profile. The new password is read at a hidden prompt and
+is not placed in the command line or shell history.
+
+```bash
+set -euo pipefail
+namespace="mm-bot-manager"
+release="mm-bot-manager"
+pull_secret="harbor-pull"
+harbor_server="harbor.internal.example"
+
+read -r -p "Harbor username: " HARBOR_USERNAME
+read -r -s -p "Harbor password: " HARBOR_PASSWORD
+printf '\n'
+kubectl -n "$namespace" create secret docker-registry "$pull_secret" \
+  --docker-server="$harbor_server" \
+  --docker-username="$HARBOR_USERNAME" \
+  --docker-password="$HARBOR_PASSWORD" \
+  --dry-run=client -o yaml | kubectl -n "$namespace" apply -f -
+unset HARBOR_USERNAME HARBOR_PASSWORD
+
+kubectl -n "$namespace" get secret "$pull_secret" \
+  -o jsonpath='{.type}{"\n"}' | grep -Fx 'kubernetes.io/dockerconfigjson'
+kubectl -n "$namespace" rollout restart deployment \
+  -l "app.kubernetes.io/instance=$release"
+kubectl -n "$namespace" rollout status deployment \
+  -l "app.kubernetes.io/instance=$release" --timeout=10m
+```
+
+This verifies that the Secret was updated and that the application rollout
+completed. It does **not** by itself verify the new Harbor credentials: the
+chart's default `IfNotPresent` policy may reuse an image already cached on the
+node. The refreshed Secret is used whenever a node has to pull an image. To
+actively validate credentials, make a planned Helm upgrade to a new immutable
+image digest (or tag known not to be present on the target node), then wait for
+that Pod to become Ready. Validate the PostgreSQL repository separately during a
+maintenance window if its Harbor permissions differ from the application image.
+
+`imagePullSecrets` authenticates image pulls; it does not make a private Harbor
+CA trusted. Install the Harbor CA in containerd, CRI-O, or Docker configuration
+on **every cluster node** and restart/reload that runtime as required by the
+platform before deployment.
+
+## 5. Validate and install
+
+Render before changing cluster state:
+
+```bash
+helm lint deploy/helm/mm-bot-manager
+helm template mm-bot-manager deploy/helm/mm-bot-manager \
+  --namespace mm-bot-manager --kube-version 1.21.1 \
+  --values deploy/helm/mm-bot-manager/examples/values-external.yaml
+helm template mm-bot-manager deploy/helm/mm-bot-manager \
+  --namespace mm-bot-manager --kube-version 1.21.1 \
+  --values deploy/helm/mm-bot-manager/examples/values-internal-longhorn.yaml
+helm template mm-bot-manager deploy/helm/mm-bot-manager \
+  --namespace mm-bot-manager --kube-version 1.21.1 \
+  --values deploy/helm/mm-bot-manager/examples/values-internal-local-path.yaml
+helm template mm-bot-manager deploy/helm/mm-bot-manager \
+  --namespace mm-bot-manager --kube-version 1.21.1 \
+  --values deploy/helm/mm-bot-manager/examples/values-harbor.yaml
+```
+
+Install external PostgreSQL mode:
+
+```bash
+helm upgrade --install mm-bot-manager deploy/helm/mm-bot-manager \
+  --namespace mm-bot-manager \
+  --values deploy/helm/mm-bot-manager/examples/values-external.yaml \
+  --atomic --wait
+```
+
+Install the recommended internal production mode:
+
+```bash
+helm upgrade --install mm-bot-manager deploy/helm/mm-bot-manager \
+  --namespace mm-bot-manager \
+  --values deploy/helm/mm-bot-manager/examples/values-internal-longhorn.yaml \
+  --atomic --wait
+```
+
+For the internal single-node/test deployment, use
+`examples/values-internal-local-path.yaml`. For a closed contour, use the same
+internal setup but replace the last values argument with
+`deploy/helm/mm-bot-manager/examples/values-harbor.yaml` after its Harbor
+repositories, tags or digests, and Mattermost URL have been set for the contour.
+
+## 6. Verify health and diagnose Pods
+
+Use labels rather than assuming a generated Pod name:
+
+```bash
+kubectl -n mm-bot-manager get pods \
+  -l app.kubernetes.io/instance=mm-bot-manager
+kubectl -n mm-bot-manager describe pod \
+  -l app.kubernetes.io/instance=mm-bot-manager
+```
+
+To inspect the Pod-local health listener, choose the application Pod, then run
+the port-forward in one terminal and `curl` in another:
+
+```bash
+pod_name="$(kubectl -n mm-bot-manager get pod \
+  -l app.kubernetes.io/instance=mm-bot-manager \
+  -o jsonpath='{.items[0].metadata.name}')"
+kubectl -n mm-bot-manager port-forward "pod/$pod_name" 8080:8080
+curl --fail http://127.0.0.1:8080/health/live
+curl --fail http://127.0.0.1:8080/health/ready
+```
+
+There is no Ingress because this port is a health interface, not a user-facing
+application endpoint; ingress-nginx has no traffic to route for this workload.
+
+## 7. Internal PostgreSQL backup and restore
+
+Internal mode creates a daily logical PostgreSQL custom-format dump by default
+(`0 2 * * *`, retained for 14 days) on a separate retained backup PVC. Adjust the
+schedule, retention, storage class, size, and resources under
+`database.internal.backup` before install where needed.
+
+Create an on-demand backup from the CronJob:
+
+```bash
+kubectl -n mm-bot-manager create job \
+  --from=cronjob/mm-bot-manager-backup \
+  "mm-bot-manager-backup-manual-$(date -u +%Y%m%d%H%M%S)"
+```
+
+List archives by mounting the existing backup PVC with the same image used by the
+CronJob. This never hard-codes a public PostgreSQL repository:
+
+```bash
+backup_image="$(kubectl -n mm-bot-manager get cronjob mm-bot-manager-backup \
+  -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].image}')"
+backup_claim="$(kubectl -n mm-bot-manager get pvc \
+  -l app.kubernetes.io/instance=mm-bot-manager,app.kubernetes.io/component=backup \
+  -o jsonpath='{.items[0].metadata.name}')"
+kubectl -n mm-bot-manager run backup-inspector \
+  --restart=Never \
+  --image="$backup_image" \
+  --overrides="$(
+    printf '{"spec":{"automountServiceAccountToken":false,"containers":[{"name":"backup-inspector","image":"%s","command":["sh","-ec","ls -lh /backups"],"volumeMounts":[{"name":"backups","mountPath":"/backups","readOnly":true}]}],"volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"%s","readOnly":true}}]}}' \
+      "$backup_image" "$backup_claim"
+  )"
+kubectl -n mm-bot-manager logs backup-inspector
+kubectl -n mm-bot-manager delete pod backup-inspector
+```
+
+To restore, first list archives with the preceding temporary Pod and choose an
+existing safe basename. A restore is destructive: suspend the backup CronJob and
+wait until every non-terminal backup Job has completed or failed before scaling
+the application down. The following Bash procedure keeps its release,
+namespace, chart, and values profile in quoted variables. Its cleanup handler
+resumes the CronJob only if this procedure suspended it and no restore Job is
+still running or in an unknown state. It leaves a CronJob that was already
+suspended in that state.
+
+Run it from a source checkout after setting `values_file` to the exact internal
+profile used by the release. The chart labels backup Jobs specifically so the
+wait loop includes scheduled and manually created backup Jobs.
+
+```bash
+set -euo pipefail
+namespace="mm-bot-manager"
+release="mm-bot-manager"
+chart="deploy/helm/mm-bot-manager"
+values_file="$chart/examples/values-internal-longhorn.yaml"
+restore_file="mm-bot-manager-20260728T020000Z.dump"
+restore_manifest=""
+restore_job=""
+restore_started=false
+restore_terminal=false
+resume_backup=false
+
+deployment="$(kubectl -n "$namespace" get deployment \
+  -l "app.kubernetes.io/instance=$release" \
+  -o jsonpath='{.items[0].metadata.name}')"
+backup_cronjob="$(kubectl -n "$namespace" get cronjob \
+  -l "app.kubernetes.io/instance=$release,app.kubernetes.io/component=backup" \
+  -o jsonpath='{.items[0].metadata.name}')"
+test -n "$deployment"
+test -n "$backup_cronjob"
+
+cleanup() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  test -z "$restore_manifest" || rm -f "$restore_manifest"
+  if [ "$resume_backup" = true ] && { [ "$restore_started" = false ] || [ "$restore_terminal" = true ]; }; then
+    if ! kubectl -n "$namespace" patch cronjob "$backup_cronjob" \
+      --type=merge -p '{"spec":{"suspend":false}}'; then
+      printf '%s\n' "ERROR: could not resume backup CronJob $backup_cronjob" >&2
+      status=1
+    fi
+  elif [ "$resume_backup" = true ]; then
+    printf '%s\n' \
+      "Backup CronJob remains suspended: restore Job ${restore_job:-unknown} may still be running or its creation state is unknown." >&2
+  fi
+  exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+
+backup_was_suspended="$(kubectl -n "$namespace" get cronjob "$backup_cronjob" \
+  -o jsonpath='{.spec.suspend}')"
+case "$backup_was_suspended" in
+  true) ;;
+  false|'')
+    kubectl -n "$namespace" patch cronjob "$backup_cronjob" \
+      --type=merge -p '{"spec":{"suspend":true}}'
+    resume_backup=true
+    ;;
+  *)
+    printf '%s\n' "Unexpected CronJob suspend value: $backup_was_suspended" >&2
+    exit 1
+    ;;
+esac
+
+nonterminal_backup_jobs() {
+  kubectl -n "$namespace" get jobs \
+    -l "app.kubernetes.io/instance=$release,app.kubernetes.io/component=backup" \
+    -o go-template='{{range .items}}{{ $terminal := false }}{{range .status.conditions}}{{if and (or (eq .type "Complete") (eq .type "Failed")) (eq .status "True")}}{{ $terminal = true }}{{end}}{{end}}{{if not $terminal}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}'
+}
+while true; do
+  pending_backup_jobs="$(nonterminal_backup_jobs)"
+  test -z "$pending_backup_jobs" && break
+  printf '%s\n%s\n' \
+    "Waiting for non-terminal backup Jobs before restore:" "$pending_backup_jobs"
+  sleep 5
+done
+
+kubectl -n "$namespace" scale "deployment/$deployment" --replicas=0
+kubectl -n "$namespace" rollout status "deployment/$deployment" --timeout=10m
+
+restore_manifest="$(mktemp)"
+helm template "$release" "$chart" \
+  --namespace "$namespace" \
+  --kube-version 1.21.1 \
+  --values "$values_file" \
+  --show-only templates/restore-job.yaml \
+  --set database.internal.restore.enabled=true \
+  --set-string "database.internal.restore.file=$restore_file" \
+  >"$restore_manifest"
+restore_started=true
+restore_job="$(kubectl -n "$namespace" create -f "$restore_manifest" \
+  -o jsonpath='{.metadata.name}')"
+if kubectl -n "$namespace" wait \
+  --for=condition=complete "job/$restore_job" --timeout=30m; then
+  restore_terminal=true
+else
+  printf '%s\n' \
+    "Restore did not complete; backup CronJob remains suspended. See the manual procedure below." >&2
+  exit 1
+fi
+kubectl -n "$namespace" logs "job/$restore_job"
+kubectl -n "$namespace" delete "job/$restore_job" --wait=true
+
+kubectl -n "$namespace" scale "deployment/$deployment" --replicas=1
+kubectl -n "$namespace" rollout status "deployment/$deployment" --timeout=10m
+```
+
+If the script reports that the backup CronJob remains suspended, do **not**
+resume it blindly: first make the restore Job terminal, or explicitly abort and
+delete it. Reuse the `namespace`, `backup_cronjob`, and `restore_job` variables
+from the script. Choose exactly one safe path below, then run the resume command
+only after that path succeeds.
+
+If `restore_job` is empty because the client was interrupted while creating it,
+first list the labelled restore Jobs, inspect the intended one, and set the
+variable to that exact name. Do not resume while any candidate is still running;
+repeat the terminal or abort procedure for every candidate if more than one is
+listed.
+
+```bash
+kubectl -n "$namespace" get jobs \
+  -l "app.kubernetes.io/instance=$release,app.kubernetes.io/component=restore"
+restore_job="RESTORE_JOB_NAME_FROM_THE_LIST"
+test -n "$restore_job"
+```
+
+Wait for the restore Job to reach either terminal condition:
+
+```bash
+kubectl -n "$namespace" wait \
+  --for=condition=complete "job/$restore_job" --timeout=30m || \
+  kubectl -n "$namespace" wait \
+    --for=condition=failed "job/$restore_job" --timeout=5m
+
+kubectl -n "$namespace" patch cronjob "$backup_cronjob" \
+  --type=merge -p '{"spec":{"suspend":false}}'
+```
+
+Or, after explicit operator approval to abandon this restore, delete its Job and
+wait for foreground deletion of its Pod(s):
+
+```bash
+kubectl -n "$namespace" delete "job/$restore_job" \
+  --cascade=foreground --wait=true
+
+kubectl -n "$namespace" patch cronjob "$backup_cronjob" \
+  --type=merge -p '{"spec":{"suspend":false}}'
+```
+
+Replace the sample filename with a filename shown by the archive-inspection
+command, retaining its schema-safe basename format. A restore replaces the target
+database, so test it in an isolated environment and ensure a current backup exists
+before starting.
+
+## 8. Upgrade, rollback, uninstall, and retained storage
+
+Preview upgrades with `helm template` from section 5, then run the same
+`helm upgrade --install` command with the selected profile. If the release is
+unhealthy after an upgrade, inspect Pods and Helm history, then roll back to a
+known revision:
+
+```bash
+helm -n mm-bot-manager history mm-bot-manager
+helm -n mm-bot-manager rollback mm-bot-manager REVISION --wait
+```
+
+Uninstalling the release retains the internal data and backup PVCs. Inspect the
+actual resource names first; do not delete data merely because a Helm release was
+removed:
+
+```bash
+data_claim="$(kubectl -n mm-bot-manager get pvc \
+  -l app.kubernetes.io/instance=mm-bot-manager,app.kubernetes.io/component=postgresql \
+  -o jsonpath='{.items[0].metadata.name}')"
+backup_claim="$(kubectl -n mm-bot-manager get pvc \
+  -l app.kubernetes.io/instance=mm-bot-manager,app.kubernetes.io/component=backup \
+  -o jsonpath='{.items[0].metadata.name}')"
+kubectl -n mm-bot-manager get pvc "$data_claim" "$backup_claim" -o wide
+helm -n mm-bot-manager uninstall mm-bot-manager
+```
+
+After explicit operator confirmation that retained backups are exported and the
+data is no longer needed, delete only the names resolved above:
+
+```bash
+printf '%s' 'Type DELETE to remove the resolved data and backup PVCs: '
+read -r confirm
+test "$confirm" = DELETE
+kubectl -n mm-bot-manager delete pvc "$data_claim" "$backup_claim"
+```
+
+Two PVCs in the same Longhorn cluster are not complete disaster recovery. Configure
+Longhorn backup/export to a separate S3 or NFS target and test restores from it.
+With `local-path`, copy validated dump files off the node: both the data volume and
+the backup volume are lost when that node is lost.

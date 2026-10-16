@@ -1,0 +1,21 @@
+image:
+  repository: harbor.internal.example/platform/mm-bot-manager
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: harbor-pull
+app:
+  existingSecret: mm-bot-manager-app
+mattermost:
+  url: https://mm.internal.example
+database:
+  mode: internal
+  internal:
+    image:
+      repository: harbor.internal.example/library/postgres
+      tag: 15.18-alpine3.24
+    auth:
+      existingSecret: mm-bot-manager-postgresql
+    storage:
+      storageClass: longhorn
+    backup:
+      storageClass: longhorn

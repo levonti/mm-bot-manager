@@ -5,6 +5,7 @@ import signal
 from .config import Settings, load_settings
 from .db import DbConn, connect, connect_postgres, init_schema
 from .dispatcher import CommandContextFactory, MessageRouter
+from .health import start_health_server
 from .logging import configure_logging, get_logger
 from .mm_client import MattermostClient, MattermostError
 from .operations import recover_operations
@@ -25,6 +26,21 @@ async def _resolve_approvers(mm: MattermostClient, usernames: list[str]) -> froz
                 "Fix MM_APPROVERS or remove it to disable approval."
             ) from None
     return frozenset(ids)
+
+
+def _connect_database(settings: Settings) -> DbConn:
+    if settings.db_url:
+        return connect_postgres(settings.db_url)
+    if settings.db_host:
+        return connect_postgres(
+            None,
+            host=settings.db_host,
+            port=settings.db_port,
+            dbname=settings.db_name,
+            user=settings.db_user,
+            password=settings.db_password,
+        )
+    return connect(settings.db_path)
 
 
 async def serve(settings: Settings, conn: DbConn) -> None:
@@ -58,36 +74,58 @@ async def serve(settings: Settings, conn: DbConn) -> None:
         log.info(
             "startup_recovery", unresolved_operations=unresolved, interrupted_posts=interrupted
         )
-        async with contextlib.aclosing(
-            stream_events(
-                settings.mm_ws_url,
-                settings.mm_bot_token,
-                verify_ssl=settings.mm_verify_ssl,
+        health_handlers: set[asyncio.Task[None]] = set()
+        try:
+            server = await start_health_server(
+                conn,
+                settings.health_host,
+                settings.health_port,
+                health_handlers,
             )
-        ) as events:
-            await process_events(
-                events,
-                router,
-                factory,
-                worker_count=settings.max_workers,
-                queue_size=settings.event_queue_size,
-                drain_timeout=settings.shutdown_timeout,
-            )
+            async with (
+                server,
+                contextlib.aclosing(
+                    stream_events(
+                        settings.mm_ws_url,
+                        settings.mm_bot_token,
+                        verify_ssl=settings.mm_verify_ssl,
+                    )
+                ) as events,
+            ):
+                await process_events(
+                    events,
+                    router,
+                    factory,
+                    worker_count=settings.max_workers,
+                    queue_size=settings.event_queue_size,
+                    drain_timeout=settings.shutdown_timeout,
+                )
+        finally:
+            handlers = tuple(health_handlers)
+            for handler in handlers:
+                handler.cancel()
+            await asyncio.gather(*handlers, return_exceptions=True)
 
 
 async def main_async() -> None:
     settings = load_settings()
     configure_logging(settings.log_level)
-    conn = connect_postgres(settings.db_url) if settings.db_url else connect(settings.db_path)
+    conn = _connect_database(settings)
     loop = asyncio.get_running_loop()
     task = asyncio.current_task()
-    assert task is not None
-    loop.add_signal_handler(signal.SIGTERM, task.cancel)
+    installed = False
     try:
+        if task is not None:
+            try:
+                loop.add_signal_handler(signal.SIGTERM, task.cancel)
+                installed = True
+            except NotImplementedError:
+                pass
         with instance_lock(conn, settings.db_path):
             await serve(settings, conn)
     finally:
-        loop.remove_signal_handler(signal.SIGTERM)
+        if installed:
+            loop.remove_signal_handler(signal.SIGTERM)
         conn.close()
 
 

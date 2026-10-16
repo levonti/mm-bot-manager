@@ -1,0 +1,104 @@
+{{- if eq .Values.database.mode "internal" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "mm-bot-manager.postgresqlFullname" . }}
+  labels:
+    {{- include "mm-bot-manager.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  serviceName: {{ include "mm-bot-manager.postgresqlFullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mm-bot-manager.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgresql
+  template:
+    metadata:
+      labels:
+        {{- include "mm-bot-manager.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: postgresql
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.database.internal.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: postgresql
+          image: {{ include "mm-bot-manager.postgresImage" . }}
+          imagePullPolicy: {{ .Values.database.internal.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.database.internal.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: postgresql
+              containerPort: {{ .Values.database.internal.service.port }}
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.internal.auth.existingSecret }}
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.internal.auth.existingSecret }}
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.internal.auth.existingSecret }}
+                  key: POSTGRES_DB
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            periodSeconds: {{ .Values.database.internal.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.database.internal.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.database.internal.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            periodSeconds: {{ .Values.database.internal.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.database.internal.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.database.internal.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            periodSeconds: {{ .Values.database.internal.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.database.internal.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.database.internal.probes.liveness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.database.internal.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        annotations:
+          helm.sh/resource-policy: keep
+        labels:
+          {{- include "mm-bot-manager.selectorLabels" . | nindent 10 }}
+          app.kubernetes.io/component: postgresql
+      spec:
+        accessModes:
+          {{- toYaml .Values.database.internal.storage.accessModes | nindent 10 }}
+        storageClassName: {{ .Values.database.internal.storage.storageClass }}
+        resources:
+          requests:
+            storage: {{ .Values.database.internal.storage.size }}
+{{- end }}

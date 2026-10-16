@@ -6,8 +6,9 @@ import json
 from contextlib import closing
 from dataclasses import asdict
 
+from .__main__ import _connect_database
 from .config import load_settings
-from .db import DbConn, connect, connect_postgres, init_schema, transaction
+from .db import DbConn, init_schema, transaction
 from .dispatcher import CommandContextFactory
 from .mm_client import MattermostClient
 from .operations import compensate, recover_operations
@@ -81,7 +82,7 @@ def main() -> int:
     attach.add_argument("--reviewed", action="store_true", required=True)
     args = parser.parse_args()
     settings = load_settings()
-    conn = connect_postgres(settings.db_url) if settings.db_url else connect(settings.db_path)
+    conn = _connect_database(settings)
     with closing(conn), instance_lock(conn, settings.db_path):
         init_schema(conn)
         if args.command == "list":

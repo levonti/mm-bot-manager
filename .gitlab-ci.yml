@@ -4,6 +4,7 @@ stages:
   - verify
 
 variables:
+  HELM_VERSION: v3.17.3
   UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
   POSTGRES_DB: mm_bot_manager_test
   POSTGRES_USER: mm_bot_test
@@ -23,12 +24,27 @@ verify:
     paths:
       - .uv-cache/
   before_script:
+    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl
+    - |
+      case "$(uname -m)" in
+        x86_64) helm_arch=amd64 ;;
+        aarch64) helm_arch=arm64 ;;
+        *) echo "Unsupported CI architecture" >&2; exit 1 ;;
+      esac
+      helm_archive="helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz"
+      curl --fail --silent --show-error --location "https://get.helm.sh/${helm_archive}" --output "/tmp/${helm_archive}"
+      curl --fail --silent --show-error --location "https://get.helm.sh/${helm_archive}.sha256sum" --output "/tmp/${helm_archive}.sha256sum"
+      (cd /tmp && sha256sum --check "${helm_archive}.sha256sum")
+      tar -xzf "/tmp/${helm_archive}" -C /tmp
+      install -m 0755 "/tmp/linux-${helm_arch}/helm" /usr/local/bin/helm
+      helm version --short
     - pip install --no-cache-dir uv==0.11.7
     - uv sync --frozen --extra postgres
   script:
     - uv run --no-sync ruff check src tests
     - uv run --no-sync ruff format --check src tests
     - uv run --no-sync mypy src
+    - helm lint deploy/helm/mm-bot-manager
     - uv run --no-sync pytest -q --cov=mm_bot_manager --cov-branch --cov-fail-under=85 --cov-report=term-missing --cov-report=xml:coverage.xml --junitxml=report.xml
   artifacts:
     when: always

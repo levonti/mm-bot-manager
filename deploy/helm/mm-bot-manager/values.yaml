@@ -1,0 +1,124 @@
+image:
+  repository: mm-bot-manager
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+app:
+  existingSecret: mm-bot-manager-app
+
+mattermost:
+  url: https://mm.example.com
+  approvers: ""
+  verifySSL: true
+logLevel: INFO
+
+health:
+  host: 0.0.0.0
+  port: 8080
+probes:
+  startup:
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 30
+  readiness:
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  liveness:
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 6
+
+serviceAccount:
+  create: true
+  name: ""
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+nodeSelector: {}
+tolerations: []
+affinity: {}
+terminationGracePeriodSeconds: 65
+
+database:
+  mode: external
+  external:
+    existingSecret: mm-bot-manager-external-db
+  internal:
+    image:
+      repository: postgres
+      tag: 15.18-alpine3.24
+      digest: ""
+      pullPolicy: IfNotPresent
+    auth:
+      existingSecret: mm-bot-manager-postgresql
+    service:
+      port: 5432
+    storage:
+      storageClass: longhorn
+      accessModes: [ReadWriteOnce]
+      size: 8Gi
+    podSecurityContext:
+      seccompProfile:
+        type: RuntimeDefault
+    containerSecurityContext: {}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    probes:
+      startup:
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 30
+      readiness:
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+      liveness:
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 6
+    backup:
+      enabled: true
+      schedule: "0 2 * * *"
+      retentionDays: 14
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      storageClass: longhorn
+      accessModes: [ReadWriteOnce]
+      size: 5Gi
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+    restore:
+      enabled: false
+      file: ""
