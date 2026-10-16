@@ -1,0 +1,243 @@
+"""Journal irreversible API calls before sending them; compensate incomplete results."""
+
+from typing import TYPE_CHECKING, NoReturn
+
+from .db import transaction
+from .logging import get_logger
+from .mm_client import MattermostError
+
+if TYPE_CHECKING:
+    from .commands.context import CommandContext
+    from .repository import PendingRequestRecord
+
+log = get_logger(__name__)
+
+
+class OperationError(RuntimeError):
+    """Safe, credential-free message that can be returned to the caller."""
+
+
+def _resolver(ctx: CommandContext, request_id: str) -> str:
+    request = ctx.pending_repo.get(request_id)
+    return request.resolved_by if request and request.resolved_by else ctx.caller_user_id
+
+
+def _uncertain(ctx: CommandContext, operation_id: str, request_id: str | None) -> None:
+    try:
+        with transaction(ctx.operation_repo.conn):
+            ctx.operation_repo.update(operation_id, "needs_review")
+            if request_id:
+                ctx.pending_repo.resolve(
+                    request_id,
+                    status="needs_review",
+                    resolved_by=_resolver(ctx, request_id),
+                    expected_status="provisioning",
+                )
+    except Exception:
+        # The original durable intent remains even if the database is unavailable.
+        log.error("operation_journal_unavailable", operation_id=operation_id)
+    log.error("operation_requires_review", operation_id=operation_id)
+
+
+async def compensate(
+    ctx: CommandContext,
+    operation_id: str,
+    kind: str,
+    remote_id: str,
+    request_id: str | None = None,
+) -> bool:
+    try:
+        try:
+            if kind == "bot_create":
+                await ctx.mm.disable_bot(remote_id)
+            else:
+                await ctx.mm.revoke_user_access_token(remote_id)
+        except MattermostError as exc:
+            if exc.status != 404:  # An absent resource is already safe.
+                raise
+        with transaction(ctx.operation_repo.conn):
+            if kind == "token_create":
+                ctx.token_repo.mark_revoked(remote_id)
+            else:
+                ctx.bot_repo.mark_deleted(remote_id)
+            ctx.operation_repo.update(operation_id, "compensated", remote_id)
+            if request_id:
+                ctx.pending_repo.resolve(
+                    request_id,
+                    status="failed",
+                    resolved_by=_resolver(ctx, request_id),
+                    expected_status="provisioning",
+                )
+                ctx.pending_repo.resolve(
+                    request_id,
+                    status="failed",
+                    resolved_by=_resolver(ctx, request_id),
+                    expected_status="needs_review",
+                )
+        return True
+    except Exception:
+        # Do not log exception bodies: a remote error may echo credentials.
+        log.error("compensation_failed", operation_id=operation_id, kind=kind)
+        return False
+
+
+def _failed_creation(
+    ctx: CommandContext,
+    operation_id: str,
+    request_id: str | None,
+    exc: BaseException,
+) -> NoReturn:
+    if isinstance(exc, MattermostError) and 400 <= exc.status < 500 and exc.status != 408:
+        with transaction(ctx.operation_repo.conn):
+            ctx.operation_repo.update(operation_id, "compensated")
+            if request_id:
+                ctx.pending_repo.release(request_id)
+        raise exc
+    _uncertain(ctx, operation_id, request_id)
+    if not isinstance(exc, Exception):
+        raise exc
+    raise OperationError(
+        f"The API outcome is uncertain (operation `{operation_id}`). "
+        "It will not be retried automatically; contact the operator."
+    ) from None
+
+
+async def create_managed_bot(
+    ctx: CommandContext,
+    *,
+    username: str,
+    display_name: str | None,
+    description: str | None,
+    request: PendingRequestRecord | None = None,
+) -> str:
+    request_id = request.request_id if request else None
+    with transaction(ctx.operation_repo.conn):
+        if ctx.operation_repo.active_for("bot_create", username):
+            raise OperationError("An unfinished operation for this bot requires operator review.")
+        if request_id and not ctx.pending_repo.claim(request_id, ctx.caller_user_id):
+            raise OperationError(f"Request `{request_id}` is already being processed or resolved.")
+        operation_id = ctx.operation_repo.start("bot_create", username, request_id)
+    try:
+        bot = await ctx.mm.create_bot(
+            username=username,
+            display_name=display_name,
+            description=description,
+        )
+        bot_user_id: str = bot["user_id"]
+    except BaseException as exc:
+        _failed_creation(ctx, operation_id, request_id, exc)
+
+    try:
+        ctx.operation_repo.update(operation_id, "remote_created", bot_user_id)
+        with transaction(ctx.operation_repo.conn):
+            ctx.bot_repo.insert(
+                bot_user_id=bot_user_id,
+                username=username,
+                display_name=display_name,
+                description=description,
+                owner_user_id=request.requester_user_id if request else ctx.caller_user_id,
+                owner_username=request.requester_username if request else ctx.caller_username,
+            )
+            if request_id and not ctx.pending_repo.resolve(
+                request_id,
+                status="approved",
+                resolved_by=ctx.caller_user_id,
+                expected_status="provisioning",
+            ):
+                raise OperationError("The approval state changed during provisioning.")
+            ctx.operation_repo.update(operation_id, "completed")
+    except BaseException as exc:
+        disabled = await compensate(ctx, operation_id, "bot_create", bot_user_id, request_id)
+        if not isinstance(exc, Exception):
+            raise
+        outcome = (
+            "The incomplete bot was disabled."
+            if disabled
+            else "Disabling the incomplete bot requires operator attention."
+        )
+        raise OperationError(
+            f"Bot creation was not completed (operation `{operation_id}`). {outcome}"
+        ) from None
+    return bot_user_id
+
+
+async def mint_and_deliver_token(
+    ctx: CommandContext,
+    *,
+    bot_user_id: str,
+    username: str,
+    description: str,
+) -> str:
+    if ctx.channel_type != "D":
+        raise OperationError("Tokens can only be created in a direct message to this manager.")
+    with transaction(ctx.operation_repo.conn):
+        if ctx.operation_repo.active_for("token_create", bot_user_id):
+            raise OperationError("An unfinished token operation requires operator review.")
+        operation_id = ctx.operation_repo.start("token_create", bot_user_id)
+    marker = f"[mm-bot-manager:{operation_id}]"
+    try:
+        resp = await ctx.mm.create_user_access_token(bot_user_id, f"{description} {marker}")
+        token_id: str = resp["id"]
+        token_value: str = resp["token"]
+    except BaseException as exc:
+        _failed_creation(ctx, operation_id, None, exc)
+
+    try:
+        ctx.operation_repo.update(operation_id, "remote_created", token_id)
+        with transaction(ctx.operation_repo.conn):
+            ctx.token_repo.record(
+                token_id=token_id,
+                bot_user_id=bot_user_id,
+                description=description,
+            )
+            ctx.operation_repo.update(operation_id, "recorded")
+        await ctx.bot_mm.create_post(
+            channel_id=ctx.channel_id,
+            message=(
+                f"Minted token for `@{username}`.\n- token id: `{token_id}`\n\n"
+                "Store this token securely. This message remains in your Mattermost history.\n"
+                f"```\n{token_value}\n```"
+            ),
+        )
+        ctx.operation_repo.update(operation_id, "completed")
+    except BaseException as exc:
+        revoked = await compensate(ctx, operation_id, "token_create", token_id)
+        if not isinstance(exc, Exception):
+            raise
+        outcome = "The token was revoked." if revoked else "Revocation requires operator attention."
+        raise OperationError(
+            f"Token issuance did not complete (operation `{operation_id}`). {outcome}"
+        ) from None
+    return f"Minted token for `@{username}` and sent it in this direct message (id `{token_id}`)."
+
+
+async def recover_operations(ctx: CommandContext) -> int:
+    """Run once at startup under the exclusive instance lock, before accepting events."""
+    unresolved = 0
+    for op in ctx.operation_repo.unfinished():
+        if op.remote_id:
+            if not await compensate(ctx, op.operation_id, op.kind, op.remote_id, op.request_id):
+                unresolved += 1
+            continue
+        if op.kind == "token_create":
+            # The marker recovers the crash window between the POST and saving its ID.
+            try:
+                marker = f"[mm-bot-manager:{op.operation_id}]"
+                tokens = await ctx.mm.list_user_access_tokens(op.resource)
+                matches = [t for t in tokens if str(t.get("description", "")).endswith(marker)]
+                if matches:
+                    for token in matches:
+                        try:
+                            await ctx.mm.revoke_user_access_token(token["id"])
+                        except MattermostError as exc:
+                            if exc.status != 404:
+                                raise
+                        ctx.token_repo.mark_revoked(token["id"])
+                    ctx.operation_repo.update(op.operation_id, "compensated")
+                    continue
+            except Exception:
+                log.error("token_recovery_failed", operation_id=op.operation_id)
+        # Never adopt or disable a bot merely because its username matches an intent.
+        _uncertain(ctx, op.operation_id, op.request_id)
+        unresolved += 1
+    return unresolved

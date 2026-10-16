@@ -1,4 +1,5 @@
 from ..mm_client import MattermostError
+from ..operations import OperationError, create_managed_bot
 from .context import CommandContext
 from .parser import ParsedArgs
 
@@ -17,24 +18,17 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
         return f"Request `{request_id}` is already **{req.status}**."
 
     try:
-        bot = await ctx.mm.create_bot(
+        bot_user_id = await create_managed_bot(
+            ctx,
             username=req.username,
             display_name=req.display_name,
             description=req.description,
+            request=req,
         )
+    except OperationError as e:
+        return f"Could not create bot: {e}"
     except MattermostError as e:
         return f"Could not create bot: {e}"
-
-    bot_user_id = bot["user_id"]
-    ctx.bot_repo.insert(
-        bot_user_id=bot_user_id,
-        username=req.username,
-        display_name=req.display_name,
-        description=req.description,
-        owner_user_id=req.requester_user_id,
-        owner_username=req.requester_username,
-    )
-    ctx.pending_repo.resolve(request_id, status="approved", resolved_by=ctx.caller_user_id)
 
     try:
         dm = await ctx.bot_mm.create_direct_channel(ctx.manager_user_id, req.requester_user_id)

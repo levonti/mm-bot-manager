@@ -51,3 +51,50 @@ async def test_revoke_token(client):
     await client.revoke_user_access_token("tok1")
     assert route.called
     await client.aclose()
+
+
+@respx.mock
+async def test_token_listing_paginates_without_returning_token_values(client):
+    first = [{"id": f"t-{i}", "description": "integration"} for i in range(200)]
+    page0 = respx.get("https://mm.example/api/v4/users/bot/tokens?page=0&per_page=200").mock(
+        return_value=httpx.Response(200, json=first)
+    )
+    page1 = respx.get("https://mm.example/api/v4/users/bot/tokens?page=1&per_page=200").mock(
+        return_value=httpx.Response(200, json=[{"id": "last", "description": "integration"}])
+    )
+    try:
+        tokens = await client.list_user_access_tokens("bot")
+        assert len(tokens) == 201
+        assert tokens[-1]["id"] == "last"
+        assert page0.call_count == page1.call_count == 1
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_repeated_revoke_only_accepts_verified_absence(client):
+    respx.post("https://mm.example/api/v4/users/tokens/revoke").mock(
+        return_value=httpx.Response(400, json={"message": "not found"})
+    )
+    respx.get("https://mm.example/api/v4/users/tokens/tok1").mock(
+        return_value=httpx.Response(404, json={"message": "not found"})
+    )
+    try:
+        await client.revoke_user_access_token("tok1")
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_revoke_bad_request_does_not_hide_existing_active_token(client):
+    respx.post("https://mm.example/api/v4/users/tokens/revoke").mock(
+        return_value=httpx.Response(400, json={"message": "bad request"})
+    )
+    respx.get("https://mm.example/api/v4/users/tokens/tok1").mock(
+        return_value=httpx.Response(200, json={"id": "tok1", "is_active": True})
+    )
+    try:
+        with pytest.raises(MattermostError):
+            await client.revoke_user_access_token("tok1")
+    finally:
+        await client.aclose()

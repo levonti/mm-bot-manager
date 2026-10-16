@@ -12,6 +12,10 @@ def configure_logging(level: str = "INFO") -> None:
         stream=sys.stdout,
         level=log_level,
     )
+    # WebSocket DEBUG frame dumps contain the authentication challenge token.
+    # Keep third-party transport logs quiet even when application DEBUG is enabled.
+    for name in ("websockets", "websockets.client", "httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     structlog.configure(
         processors=[

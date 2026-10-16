@@ -1,4 +1,5 @@
 from ..mm_client import MattermostError
+from ..operations import OperationError, mint_and_deliver_token
 from .context import CommandContext
 from .parser import ParsedArgs
 
@@ -6,6 +7,8 @@ from .parser import ParsedArgs
 async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     if not args.positional:
         return 'Usage: `!token create <username> [--description "..."]`'
+    if ctx.channel_type != "D":
+        return "Tokens can only be created in a direct message to this manager."
     username = args.positional[0]
     bot = ctx.bot_repo.get_by_owner_and_username(ctx.caller_user_id, username)
     if bot is None:
@@ -13,21 +16,13 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
 
     description = args.take_flag("description") or f"minted by @{ctx.caller_username}"
     try:
-        resp = await ctx.mm.create_user_access_token(bot.bot_user_id, description)
-    except MattermostError as e:
+        return await mint_and_deliver_token(
+            ctx,
+            bot_user_id=bot.bot_user_id,
+            username=username,
+            description=description,
+        )
+    except OperationError as e:
         return f"Could not create token: {e}"
-
-    token_id = resp["id"]
-    token_value = resp["token"]
-    ctx.token_repo.record(
-        token_id=token_id,
-        bot_user_id=bot.bot_user_id,
-        description=description,
-    )
-    return (
-        f"Minted token for `@{username}`.\n"
-        f"- token id: `{token_id}`\n"
-        f"- description: {description}\n\n"
-        f"**Copy this token now — it will not be shown again:**\n"
-        f"```\n{token_value}\n```"
-    )
+    except MattermostError as e:
+        return f"Could not create token (API status {e.status})."

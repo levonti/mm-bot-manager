@@ -1,7 +1,7 @@
 import os
 import sqlite3
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any, Literal
 
 SCHEMA_SQL = """
@@ -41,6 +41,27 @@ CREATE TABLE IF NOT EXISTS pending_bot_request (
     deny_reason         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_req_status ON pending_bot_request(status);
+
+CREATE TABLE IF NOT EXISTS operation (
+    operation_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('bot_create', 'token_create')),
+    resource TEXT NOT NULL,
+    request_id TEXT REFERENCES pending_bot_request(request_id),
+    status TEXT NOT NULL CHECK (status IN
+        ('started', 'remote_created', 'recorded', 'completed', 'compensated', 'needs_review')),
+    remote_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_active ON operation(kind, resource)
+    WHERE status IN ('started', 'remote_created', 'recorded', 'needs_review');
+
+CREATE TABLE IF NOT EXISTS processed_post (
+    post_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('processing', 'completed', 'interrupted')),
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+);
 """
 
 _SCHEMA_STMTS = [s.strip() for s in SCHEMA_SQL.split(";") if s.strip()]
@@ -137,8 +158,8 @@ def transaction(conn: DbConn) -> Iterator[DbConn]:
     conn.execute("BEGIN")
     try:
         yield conn
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
-    else:
         conn.execute("COMMIT")
+    except BaseException:
+        with suppress(Exception):
+            conn.execute("ROLLBACK")
+        raise

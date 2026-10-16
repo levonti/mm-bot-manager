@@ -1,6 +1,7 @@
 import secrets
 
 from ..mm_client import MattermostError
+from ..operations import OperationError, create_managed_bot
 from .context import CommandContext
 from .parser import ParsedArgs
 
@@ -28,31 +29,25 @@ async def _create_now(
     description: str | None,
 ) -> str:
     try:
-        bot = await ctx.mm.create_bot(
+        bot_user_id = await create_managed_bot(
+            ctx,
             username=username,
             display_name=display_name,
             description=description,
         )
+    except OperationError as e:
+        return f"Could not create bot: {e}"
     except MattermostError as e:
         if e.status == 403:
             return (
                 "Could not create bot: permission denied.\n"
-                "The manager bot's `MM_TOKEN` must be a Personal Access Token "
+                "`MM_TOKEN` must be a Personal Access Token "
                 "from a **system_admin user account** (not a bot token). "
                 "Also ensure *System Console → Integrations → Bot Accounts → "
                 "Enable Bot Account Creation* is **true**."
             )
         return f"Could not create bot: {e}"
 
-    bot_user_id = bot["user_id"]
-    ctx.bot_repo.insert(
-        bot_user_id=bot_user_id,
-        username=username,
-        display_name=display_name,
-        description=description,
-        owner_user_id=ctx.caller_user_id,
-        owner_username=ctx.caller_username,
-    )
     return (
         f"Created bot `@{username}` (id `{bot_user_id}`). "
         f"Use `!token create {username}` to mint a token for it."

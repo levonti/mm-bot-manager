@@ -5,7 +5,7 @@ import pytest
 from mm_bot_manager.commands import CommandContext, dispatch
 from mm_bot_manager.db import connect, init_schema
 from mm_bot_manager.mm_client import MattermostError
-from mm_bot_manager.repository import BotRepo, PendingRequestRepo, TokenRepo
+from mm_bot_manager.repository import BotRepo, OperationRepo, PendingRequestRepo, TokenRepo
 
 
 class FakeMM:
@@ -15,6 +15,8 @@ class FakeMM:
         self.disabled: list[str] = []
         self.tokens_created: list[tuple[str, str]] = []
         self.tokens_revoked: list[str] = []
+        self.posts: list[dict[str, str]] = []
+        self.remote_tokens: dict[str, dict[str, str]] = {}
         self._next_bot_id = iter(f"bot-{i}" for i in range(100))
         self._next_token_id = iter(f"tok-{i}" for i in range(100))
         # Map method name → exception to raise on next call (consumed on use).
@@ -56,16 +58,24 @@ class FakeMM:
         self._maybe_raise("create_user_access_token")
         tok_id = next(self._next_token_id)
         self.tokens_created.append((user_id, description))
+        self.remote_tokens[tok_id] = {"id": tok_id, "description": description}
         return {"id": tok_id, "token": f"secret-{tok_id}", "description": description}
 
     async def revoke_user_access_token(self, token_id):
         self._maybe_raise("revoke_user_access_token")
         self.tokens_revoked.append(token_id)
+        self.remote_tokens.pop(token_id, None)
+
+    async def list_user_access_tokens(self, user_id):
+        self._maybe_raise("list_user_access_tokens")
+        return list(self.remote_tokens.values())
 
     async def create_direct_channel(self, user_id_a, user_id_b):
         return {"id": f"dm-{user_id_a}-{user_id_b}"}
 
     async def create_post(self, *, channel_id, message, root_id=None):
+        self._maybe_raise("create_post")
+        self.posts.append({"channel_id": channel_id, "message": message})
         return {}
 
 
@@ -94,6 +104,8 @@ def ctx():
             bot_mm=mm,  # type: ignore[arg-type]
             manager_user_id="mgr-id",
             approver_ids=approver_ids,
+            operation_repo=OperationRepo(conn),
+            channel_type="D",
         )
 
     yield make, mm, bot_repo, token_repo, pending_repo
@@ -192,6 +204,7 @@ async def test_list_empty(ctx):
     make, *_ = ctx
     reply = await dispatch(make(), "!list")
     assert "don't own any bots" in reply
+    assert "`!create <username>`" in reply
 
 
 async def test_info_no_args(ctx):
@@ -293,7 +306,8 @@ async def test_token_create_and_revoke(ctx):
     await dispatch(make(), "!create demo-bot")
     reply = await dispatch(make(), '!token create demo-bot --description "e2e"')
     assert "Minted token" in reply
-    assert "secret-tok-0" in reply
+    assert "secret-tok-0" not in reply
+    assert "secret-tok-0" in mm.posts[-1]["message"]
     active = token_repo.list_active_for_bot("bot-0")
     assert len(active) == 1
 
@@ -419,7 +433,7 @@ async def test_approve_request_not_found(ctx):
 
 
 async def test_approve_already_resolved(ctx):
-    make, *_, pending_repo = ctx
+    make, _, _, _, pending_repo = ctx
     approvers = frozenset(["approver-id"])
     await dispatch(make(approver_ids=approvers), "!create demo-bot")
     rows = pending_repo._conn.execute("SELECT request_id FROM pending_bot_request").fetchall()

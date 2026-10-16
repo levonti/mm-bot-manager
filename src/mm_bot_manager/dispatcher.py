@@ -1,9 +1,12 @@
+import asyncio
 import json
 import re
 from typing import Any
 
 from .commands import CommandContext, dispatch
 from .logging import get_logger
+from .mm_client import MattermostClient
+from .repository import BotRepo, OperationRepo, PendingRequestRepo, PostRepo, TokenRepo
 
 log = get_logger(__name__)
 
@@ -35,6 +38,8 @@ async def handle_event(
         return
 
     data = event.get("data") or {}
+    if not isinstance(data, dict):
+        return
     post_raw = data.get("post")
     if not post_raw:
         return
@@ -44,6 +49,8 @@ async def handle_event(
         log.warning("bad_post_json")
         return
 
+    if not isinstance(post, dict):
+        return
     channel_type = data.get("channel_type")
     command_text = router.extract_command(post, channel_type)
     if command_text is None:
@@ -52,25 +59,42 @@ async def handle_event(
     sender_id = post.get("user_id")
     sender_name = data.get("sender_name", "").lstrip("@")
     channel_id = post.get("channel_id")
-    if not sender_id or not channel_id:
+    post_id = post.get("id")
+    if (
+        not isinstance(sender_id, str)
+        or not sender_id
+        or not isinstance(channel_id, str)
+        or not channel_id
+        or not isinstance(post_id, str)
+        or not post_id
+    ):
+        log.warning("post_missing_identity")
+        return
+    if not ctx_factory.post_repo.claim(post_id):
         return
 
     ctx = ctx_factory.build(
         caller_user_id=sender_id,
         caller_username=sender_name,
         channel_id=channel_id,
+        channel_type=channel_type,
     )
-    log.info("dispatching", user=sender_name, channel=channel_id, cmd=command_text[:120])
+    log.info("dispatching", user_id=sender_id, channel_id=channel_id, post_id=post_id)
     try:
-        reply = await dispatch(ctx, command_text)
-    except Exception:
-        log.exception("command_failed")
-        reply = "Something went wrong running that command. Check the server logs."
-
-    try:
+        try:
+            reply = await dispatch(ctx, command_text)
+        except Exception as exc:
+            log.error("command_failed", post_id=post_id, error_type=type(exc).__name__)
+            reply = "Something went wrong running that command. Contact the operator."
         await ctx_factory.bot_mm.create_post(channel_id=channel_id, message=reply)
-    except Exception:
-        log.exception("reply_post_failed")
+    except asyncio.CancelledError:
+        ctx_factory.post_repo.finish(post_id, interrupted=True)
+        raise
+    except Exception as exc:
+        log.error("reply_post_failed", post_id=post_id, error_type=type(exc).__name__)
+        ctx_factory.post_repo.finish(post_id, interrupted=True)
+    else:
+        ctx_factory.post_repo.finish(post_id)
 
 
 class CommandContextFactory:
@@ -78,11 +102,11 @@ class CommandContextFactory:
 
     def __init__(
         self,
-        bot_repo: Any,
-        token_repo: Any,
-        pending_repo: Any,
-        admin_mm: Any,
-        bot_mm: Any,
+        bot_repo: BotRepo,
+        token_repo: TokenRepo,
+        pending_repo: PendingRequestRepo,
+        admin_mm: MattermostClient,
+        bot_mm: MattermostClient,
         manager_user_id: str,
         approver_ids: frozenset[str],
     ) -> None:
@@ -93,9 +117,16 @@ class CommandContextFactory:
         self.bot_mm = bot_mm
         self._manager_user_id = manager_user_id
         self._approver_ids = approver_ids
+        self.operation_repo = OperationRepo(bot_repo.conn)
+        self.post_repo = PostRepo(bot_repo.conn)
 
     def build(
-        self, *, caller_user_id: str, caller_username: str, channel_id: str
+        self,
+        *,
+        caller_user_id: str,
+        caller_username: str,
+        channel_id: str,
+        channel_type: str | None = None,
     ) -> CommandContext:
         return CommandContext(
             caller_user_id=caller_user_id,
@@ -108,4 +139,6 @@ class CommandContextFactory:
             bot_mm=self.bot_mm,
             manager_user_id=self._manager_user_id,
             approver_ids=self._approver_ids,
+            operation_repo=self.operation_repo,
+            channel_type=channel_type,
         )

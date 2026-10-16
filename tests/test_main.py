@@ -1,5 +1,6 @@
 import asyncio
-from unittest.mock import Mock
+from contextlib import nullcontext
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -129,6 +130,8 @@ async def test_main_waits_for_in_flight_health_handler_before_closing_db(
     monkeypatch.setattr(main, "get_logger", Mock(return_value=Mock()))
     monkeypatch.setattr(main, "_connect_database", Mock(return_value=FakeConn()))
     monkeypatch.setattr(main, "init_schema", lambda _conn: None)
+    monkeypatch.setattr(main, "instance_lock", lambda *_args: nullcontext())
+    monkeypatch.setattr(main, "recover_operations", AsyncMock(return_value=0))
     monkeypatch.setattr(main, "BotRepo", Mock())
     monkeypatch.setattr(main, "TokenRepo", Mock())
     monkeypatch.setattr(main, "PendingRequestRepo", Mock())

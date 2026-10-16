@@ -59,7 +59,7 @@ resources:
 nodeSelector: {}
 tolerations: []
 affinity: {}
-terminationGracePeriodSeconds: 30
+terminationGracePeriodSeconds: 65
 
 database:
   mode: external

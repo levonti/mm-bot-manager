@@ -55,7 +55,7 @@ the chart reads the listed fixed keys and does not create Secrets itself.
 | `containerSecurityContext` | privilege escalation disabled, read-only root filesystem, all capabilities dropped | Application container security context. |
 | `resources` | requests `50m/64Mi`, limits `500m/256Mi` | Application resources. |
 | `nodeSelector`, `tolerations`, `affinity` | `{}`, `[]`, `{}` | Application scheduling controls. |
-| `terminationGracePeriodSeconds` | `30` | Application graceful-shutdown window. |
+| `terminationGracePeriodSeconds` | `65` | Application drain window plus time for cancellation and compensation. |
 | `database.mode` | `external` | Select `external` or `internal`. |
 | `database.external.existingSecret` | `mm-bot-manager-external-db` | External-mode Secret with `DB_URL`. |
 | `database.internal.image` | `postgres:15.18-alpine3.24`, empty digest, `IfNotPresent` | PostgreSQL/backup/restore image; digest takes precedence. |

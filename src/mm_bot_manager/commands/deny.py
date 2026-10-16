@@ -17,12 +17,13 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     if req.status != "pending":
         return f"Request `{request_id}` is already **{req.status}**."
 
-    ctx.pending_repo.resolve(
+    if not ctx.pending_repo.resolve(
         request_id,
         status="denied",
         resolved_by=ctx.caller_user_id,
         deny_reason=reason,
-    )
+    ):
+        return f"Request `{request_id}` is already being processed or resolved."
 
     reason_line = f"\nReason: {reason}" if reason else ""
     try:

@@ -115,7 +115,30 @@ class MattermostClient:
         )
 
     async def revoke_user_access_token(self, token_id: str) -> None:
-        await self._request("POST", "/users/tokens/revoke", json={"token_id": token_id})
+        try:
+            await self._request("POST", "/users/tokens/revoke", json={"token_id": token_id})
+        except MattermostError as exc:
+            if exc.status != 400:
+                raise
+            # A repeated revoke can return 400. Verify absence rather than treating
+            # every bad request as success or blocking recovery forever.
+            try:
+                await self._request("GET", f"/users/tokens/{token_id}")
+            except MattermostError as lookup_exc:
+                if lookup_exc.status == 404:
+                    return
+                raise
+            raise exc
+
+    async def list_user_access_tokens(self, user_id: str) -> list[dict[str, Any]]:
+        tokens: list[dict[str, Any]] = []
+        page = 0
+        while True:
+            batch = await self._request("GET", f"/users/{user_id}/tokens?page={page}&per_page=200")
+            tokens.extend(batch)
+            if len(batch) < 200:
+                return tokens
+            page += 1
 
     async def create_post(
         self,

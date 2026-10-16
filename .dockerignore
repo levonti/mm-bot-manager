@@ -11,6 +11,12 @@ __pycache__
 *.py[cod]
 .pytest_cache
 .mypy_cache
+.codex
+.agents
+.uv-cache
+coverage.xml
+report.xml
+README.md
 .ruff_cache
 htmlcov
 deploy/helm/**/examples/*.env

@@ -14,6 +14,11 @@ VERIFY_KUBERNETES = ROOT / "scripts/verify-kubernetes.sh"
 pytestmark = pytest.mark.skipif(HELM is None, reason="helm is required")
 
 
+def schema_diagnostic(result: subprocess.CompletedProcess[str]) -> str:
+    # Helm 3 reports JSON schema paths with dots; Helm 4 uses slashes.
+    return result.stderr.replace(".", "/")
+
+
 def render(values: str, *extra: str, show_only: str | None = None) -> list[dict[str, Any]]:
     show_only_args = ["--show-only", show_only] if show_only is not None else []
     result = subprocess.run(
@@ -190,7 +195,7 @@ def test_restore_job_requires_an_explicit_safe_filename() -> None:
         text=True,
     )
     assert result.returncode != 0
-    assert "restore/file" in result.stderr
+    assert "restore/file" in schema_diagnostic(result)
 
 
 def workload_images(resources: list[dict[str, Any]]) -> list[str]:
@@ -248,7 +253,7 @@ def test_schema_rejects_an_unknown_database_mode() -> None:
         text=True,
     )
     assert result.returncode != 0
-    assert "database/mode" in result.stderr
+    assert "database/mode" in schema_diagnostic(result)
 
 
 def test_chart_never_renders_secret_or_ingress() -> None:
@@ -282,7 +287,7 @@ def test_schema_rejects_unknown_toleration_and_affinity_fields() -> None:
             text=True,
         )
         assert result.returncode != 0
-        assert expected_path in result.stderr
+        assert expected_path in schema_diagnostic(result)
 
 
 def test_schema_requires_only_the_active_database_secret() -> None:
@@ -324,7 +329,7 @@ def test_schema_requires_only_the_active_database_secret() -> None:
             text=True,
         )
         assert result.returncode != 0
-        assert expected_path in result.stderr
+        assert expected_path in schema_diagnostic(result)
 
 
 def test_verify_script_requires_an_explicit_local_schema_directory(
