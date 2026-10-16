@@ -44,21 +44,14 @@ deploy/helm/**/examples/*.env
 data/
 
 # JetBrains IDE
-.idea/**/workspace.xml
-.idea/**/tasks.xml
-.idea/**/usage.statistics.xml
-.idea/**/dictionaries
-.idea/**/shelf
-.idea/**/dataSources/
-.idea/**/dataSources.ids
-.idea/**/dataSources.local.xml
-.idea/**/dynamic.xml
-.idea/**/httpRequests
-.idea/sonarlint/
+/.idea/
 *.iws
 *.iml
 .idea_modules/
 out/
+
+# Generated agent planning artifacts
+/docs/superpowers/
 
 # macOS
 .DS_Store
