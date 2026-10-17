@@ -21,3 +21,5 @@ README.md
 .ruff_cache
 htmlcov
 deploy/helm/**/examples/*.env
+values-site.yaml
+harbor-auth

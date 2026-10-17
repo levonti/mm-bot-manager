@@ -1,3 +1,4 @@
+{{- include "mm-bot-manager.validateMaintenance" . -}}
 {{- $restoreFile := .Values.database.internal.restore.file }}
 {{- if and (eq .Values.database.mode "internal") .Values.database.internal.restore.enabled (ne $restoreFile "") (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]*\\.dump$" $restoreFile) }}
 apiVersion: batch/v1
@@ -8,6 +9,8 @@ metadata:
     {{- include "mm-bot-manager.labels" . | nindent 4 }}
     app.kubernetes.io/component: restore
 spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
   template:
     metadata:
       labels:
@@ -15,7 +18,7 @@ spec:
         app.kubernetes.io/component: restore
     spec:
       automountServiceAccountToken: false
-      restartPolicy: OnFailure
+      restartPolicy: Never
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -32,30 +35,15 @@ spec:
               test -f "$archive"
               pg_restore --list "$archive" >/dev/null
               target_database="$PGDATABASE"
+              case "$target_database" in
+                ''|postgres|template0|template1) echo 'Refusing to replace a system database' >&2; exit 1 ;;
+              esac
               export PGDATABASE=postgres
               dropdb --if-exists --force "$target_database"
               createdb "$target_database"
               pg_restore --exit-on-error --no-owner --dbname="$target_database" "$archive"
           env:
-            - name: PGHOST
-              value: {{ include "mm-bot-manager.postgresqlFullname" . | quote }}
-            - name: PGPORT
-              value: {{ .Values.database.internal.service.port | toString | quote }}
-            - name: PGDATABASE
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.database.internal.auth.existingSecret }}
-                  key: POSTGRES_DB
-            - name: PGUSER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.database.internal.auth.existingSecret }}
-                  key: POSTGRES_USER
-            - name: PGPASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.database.internal.auth.existingSecret }}
-                  key: POSTGRES_PASSWORD
+            {{- include "mm-bot-manager.postgresClientEnv" . | nindent 12 }}
             - name: RESTORE_FILE
               value: {{ $restoreFile | quote }}
           volumeMounts:

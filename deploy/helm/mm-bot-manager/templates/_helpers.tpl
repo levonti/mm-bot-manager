@@ -77,3 +77,38 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "mm-bot-manager.restoreFullname" -}}
 {{- printf "%s-restore" (include "mm-bot-manager.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
+
+{{- define "mm-bot-manager.validateMaintenance" -}}
+{{- $db := .Values.database.internal -}}
+{{- $count := add (ternary 1 0 $db.inspect.enabled) (ternary 1 0 $db.verification.enabled) (ternary 1 0 $db.restore.enabled) -}}
+{{- if gt (int $count) 0 -}}
+{{- if or (ne .Values.database.mode "internal") (not $db.backup.enabled) -}}
+{{- fail "Database maintenance requires internal mode and an enabled backup PVC" -}}
+{{- end -}}
+{{- if gt (int $count) 1 -}}
+{{- fail "Select only one database maintenance Job at a time" -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{- define "mm-bot-manager.postgresClientEnv" -}}
+- name: PGHOST
+  value: {{ include "mm-bot-manager.postgresqlFullname" . | quote }}
+- name: PGPORT
+  value: {{ .Values.database.internal.service.port | toString | quote }}
+- name: PGDATABASE
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.database.internal.auth.existingSecret }}
+      key: POSTGRES_DB
+- name: PGUSER
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.database.internal.auth.existingSecret }}
+      key: POSTGRES_USER
+- name: PGPASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.database.internal.auth.existingSecret }}
+      key: POSTGRES_PASSWORD
+{{- end }}

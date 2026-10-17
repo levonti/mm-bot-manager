@@ -39,8 +39,8 @@ spec:
                   set -eu
                   umask 077
                   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-                  temporary="/backups/.mm-bot-manager-${timestamp}.dump.tmp"
-                  final="/backups/mm-bot-manager-${timestamp}.dump"
+                  temporary="/backups/.mm-bot-manager-${timestamp}-${POD_UID}.dump.tmp"
+                  final="/backups/mm-bot-manager-${timestamp}-${POD_UID}.dump"
                   trap 'rm -f "$temporary"' EXIT
                   pg_dump --format=custom --file="$temporary"
                   pg_restore --list "$temporary" >/dev/null
@@ -50,6 +50,10 @@ spec:
                   find /backups -type f -name 'mm-bot-manager-*.dump' \
                     -mtime "+${RETENTION_DAYS}" -delete
               env:
+                - name: POD_UID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.uid
                 - name: PGHOST
                   value: {{ include "mm-bot-manager.postgresqlFullname" . | quote }}
                 - name: PGPORT

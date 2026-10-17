@@ -1,0 +1,42 @@
+{{- include "mm-bot-manager.validateMaintenance" . -}}
+{{- if .Values.database.internal.inspect.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-inspect" (include "mm-bot-manager.fullname" . | trunc 55 | trimSuffix "-") }}
+  labels:
+    {{- include "mm-bot-manager.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inspection
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "mm-bot-manager.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: inspection
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: inspect
+          image: {{ include "mm-bot-manager.postgresImage" . }}
+          imagePullPolicy: {{ .Values.database.internal.image.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args: ["ls -lh /backups"]
+          resources:
+            {{- toYaml .Values.database.internal.backup.resources | nindent 12 }}
+          volumeMounts:
+            - name: backups
+              mountPath: /backups
+              readOnly: true
+      volumes:
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ include "mm-bot-manager.backupFullname" . }}
+            readOnly: true
+{{- end }}

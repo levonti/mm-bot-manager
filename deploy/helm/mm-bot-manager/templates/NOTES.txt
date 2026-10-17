@@ -1,7 +1,10 @@
 The mm-bot-manager Pod runs without a Service or Ingress.
 
 Check its status:
-  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/name={{ include "mm-bot-manager.name" . }}
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=application
 
 View logs:
-  kubectl -n {{ .Release.Namespace }} logs deployment/{{ include "mm-bot-manager.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=application -c mm-bot-manager
+
+Readiness checks database reachability, not Mattermost WebSocket connectivity.
+Complete the acceptance checklist in docs/kubernetes.md after installation.

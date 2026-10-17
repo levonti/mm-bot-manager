@@ -1,0 +1,23 @@
+# Mandatory installation overlay: copy to values-site.yaml and replace every CHANGE_ME.
+# No passwords or tokens: only references to separately created Kubernetes Secrets.
+image:
+  repository: CHANGE_ME_REGISTRY/platform/mm-bot-manager
+  tag: CHANGE_ME_IMMUTABLE_TAG
+  digest: "" # Prefer sha256:<64 hex digits> after publishing the image.
+imagePullSecrets:
+  - name: harbor-pull
+mattermost:
+  url: https://CHANGE_ME_MATTERMOST
+  approvers: CHANGE_ME_APPROVER_USERNAME
+  catalogViewers: CHANGE_ME_CATALOG_VIEWER_USERNAME
+  defaultLanguage: ru
+  verifySSL: true
+  caBundle:
+    existingConfigMap: "" # Set to mm-bot-manager-ca for a private CA.
+    key: ca-bundle.crt
+database:
+  internal:
+    image:
+      repository: CHANGE_ME_REGISTRY/library/postgres
+      tag: 15.18-alpine3.24
+      digest: ""

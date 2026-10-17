@@ -16,6 +16,9 @@ mattermost:
   catalogViewers: ""
   defaultLanguage: en
   verifySSL: true
+  caBundle:
+    existingConfigMap: ""
+    key: ca-bundle.crt
 logLevel: INFO
 
 health:
@@ -122,5 +125,10 @@ database:
           cpu: 500m
           memory: 256Mi
     restore:
+      enabled: false
+      file: ""
+    inspect:
+      enabled: false
+    verification:
       enabled: false
       file: ""
