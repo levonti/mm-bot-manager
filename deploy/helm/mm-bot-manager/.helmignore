@@ -1,0 +1,3 @@
+*.env
+values-site.yaml
+harbor-auth/

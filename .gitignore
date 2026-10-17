@@ -38,6 +38,8 @@ report.xml
 /app-secret.env
 /external-db-secret.env
 /internal-db-secret.env
+/values-site.yaml
+/harbor-auth/
 deploy/helm/**/examples/*.env
 
 # Runtime data (SQLite volume mounted here locally)

@@ -25,16 +25,37 @@ trap 'rm -rf "$temporary_dir"' EXIT
 
 helm lint "$chart"
 
+validate_manifest() {
+  kubeconform \
+    -strict \
+    -summary \
+    -kubernetes-version 1.21.1 \
+    -schema-location "$schema_dir/{{ .ResourceKind }}{{ .KindSuffix }}.json" \
+    "$1"
+}
+
 for profile in "${profiles[@]}"; do
   output="$temporary_dir/${profile%.yaml}.yaml"
   helm template mmbot "$chart" \
     --namespace mmbot \
     --kube-version 1.21.1 \
     --values "$chart/examples/$profile" >"$output"
-  kubeconform \
-    -strict \
-    -summary \
-    -kubernetes-version 1.21.1 \
-    -schema-location "$schema_dir/{{ .ResourceKind }}{{ .KindSuffix }}.json" \
-    "$output"
+  validate_manifest "$output"
 done
+
+for operation in inspect verification restore; do
+  output="$temporary_dir/$operation.yaml"
+  extra=(--set "database.internal.$operation.enabled=true")
+  if [[ "$operation" != inspect ]]; then
+    extra+=(--set-string "database.internal.$operation.file=archive.dump")
+  fi
+  helm template mmbot "$chart" --namespace mmbot --kube-version 1.21.1 \
+    --values "$chart/examples/values-harbor.yaml" "${extra[@]}" >"$output"
+  validate_manifest "$output"
+done
+
+output="$temporary_dir/private-ca.yaml"
+helm template mmbot "$chart" --namespace mmbot --kube-version 1.21.1 \
+  --values "$chart/examples/values-internal-longhorn.yaml" \
+  --set mattermost.caBundle.existingConfigMap=mattermost-ca >"$output"
+validate_manifest "$output"

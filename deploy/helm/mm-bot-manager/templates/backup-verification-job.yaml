@@ -1,0 +1,74 @@
+{{- include "mm-bot-manager.validateMaintenance" . -}}
+{{- if .Values.database.internal.verification.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-verify" (include "mm-bot-manager.fullname" . | trunc 56 | trimSuffix "-") }}
+  labels:
+    {{- include "mm-bot-manager.labels" . | nindent 4 }}
+    app.kubernetes.io/component: verification
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        {{- include "mm-bot-manager.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: verification
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: verify
+          image: {{ include "mm-bot-manager.postgresImage" . }}
+          imagePullPolicy: {{ .Values.database.internal.image.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              set -eu
+              archive="/backups/${VERIFY_FILE}"
+              test -f "$archive"
+              pg_restore --list "$archive" >/dev/null
+              verification_database="mm_verify_$(printf '%s' "$POD_UID" | tr -d '-')"
+              export PGDATABASE=postgres
+              cleanup() {
+                status=$?
+                trap - EXIT
+                if ! dropdb --if-exists --force "$verification_database"; then
+                  echo "Could not remove verification database $verification_database" >&2
+                  status=1
+                fi
+                exit "$status"
+              }
+              # Never drop a pre-existing database if creation fails.
+              createdb "$verification_database"
+              trap cleanup EXIT
+              trap 'exit 143' HUP INT TERM
+              pg_restore --exit-on-error --no-owner --dbname="$verification_database" "$archive"
+              psql --no-psqlrc --dbname="$verification_database" --set=ON_ERROR_STOP=1 \
+                --tuples-only --command='SELECT count(*) AS bots FROM bot; SELECT count(*) AS tokens FROM token; SELECT count(*) AS requests FROM pending_bot_request;'
+              echo 'Archive fully restored and registry tables checked in an isolated database'
+          env:
+            {{- include "mm-bot-manager.postgresClientEnv" . | nindent 12 }}
+            - name: VERIFY_FILE
+              value: {{ .Values.database.internal.verification.file | quote }}
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          resources:
+            {{- toYaml .Values.database.internal.backup.resources | nindent 12 }}
+          volumeMounts:
+            - name: backups
+              mountPath: /backups
+              readOnly: true
+      volumes:
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ include "mm-bot-manager.backupFullname" . }}
+            readOnly: true
+{{- end }}

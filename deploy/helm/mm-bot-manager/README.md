@@ -46,11 +46,12 @@ the chart reads the listed fixed keys and does not create Secrets itself.
 | `nameOverride`, `fullnameOverride` | `""`, `""` | Override generated resource names. |
 | `app.existingSecret` | `mm-bot-manager-app` | Secret with `MM_TOKEN` and `MM_BOT_TOKEN`. |
 | `mattermost` | `url=https://mm.example.com`, `approvers=""`, `catalogViewers=""`, `defaultLanguage=en`, `verifySSL=true` | Mattermost endpoint and access/TLS settings. Imports require `approvers`; global catalog readers are approvers plus `catalogViewers`. |
+| `mattermost.caBundle` | `existingConfigMap=""`, `key=ca-bundle.crt` | Optional complete PEM trust bundle for a private Mattermost CA. Mounted read-only; `SSL_CERT_FILE` applies to HTTP and WebSocket clients. Restart after changing its external ConfigMap. |
 | `logLevel` | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `health` | `host=0.0.0.0`, `port=8080` | Pod-local liveness/readiness listener. |
 | `probes` | startup `5s/2s/30`; readiness `10s/2s/3`; liveness `10s/2s/6` | Probe period / timeout / failure threshold. |
 | `serviceAccount` | `create=true`, `name=""` | Token-less Pod ServiceAccount. |
-| `podAnnotations`, `podLabels` | `{}`, `{}` | Additional application Pod metadata. |
+| `podAnnotations`, `podLabels` | `{}`, `{}` | Additional application Pod metadata. Reserved name/instance/component labels cannot be overridden. |
 | `podSecurityContext` | UID/GID `1000`, `runAsNonRoot=true`, `RuntimeDefault` seccomp | Application Pod security context. |
 | `containerSecurityContext` | privilege escalation disabled, read-only root filesystem, all capabilities dropped | Application container security context. |
 | `resources` | requests `50m/64Mi`, limits `500m/256Mi` | Application resources. |
@@ -68,6 +69,21 @@ the chart reads the listed fixed keys and does not create Secrets itself.
 | `database.internal.probes` | startup `5s/3s/30`; readiness `10s/3s/3`; liveness `10s/3s/6` | PostgreSQL probe settings. |
 | `database.internal.backup` | enabled, `0 2 * * *`, 14 days, history `3/3`, `longhorn`, `ReadWriteOnce`, `5Gi`, requests `50m/64Mi`, limits `500m/256Mi` | Logical dump CronJob and retained backup PVC. |
 | `database.internal.restore` | `enabled=false`, `file=""` | Opt-in one-time restore Job. The file must be a safe `.dump` basename. |
+| `database.internal.inspect` | `enabled=false` | Opt-in archive inspection Job with read-only backup PVC and inherited image pull Secrets. |
+| `database.internal.verification` | `enabled=false`, `file=""` | Opt-in full trial restore into a temporary database, followed by registry-table queries and cleanup. |
+
+Maintenance Jobs require internal mode and an enabled backup PVC. Enable only one
+at a time; restore/verification require a safe existing `.dump` basename. They have
+no automatic retries. Do not enable maintenance flags in the saved installation
+values: the source checkout's `scripts/kubernetes-db.sh` renders a single Job from
+the installed release values and coordinates locking, backups and application
+shutdown. Follow `docs/kubernetes.md` in the source checkout for the full procedure.
+The verification DB needs additional space on the PostgreSQL data PVC.
+
+Application Pods have `app.kubernetes.io/component=application`; use this label
+with the release instance to select them. This addition preserves the original
+immutable Deployment selector when upgrading from 0.1.0. Both health paths check
+the database; they do not establish Mattermost WebSocket readiness.
 
 ## Fixed Secret key contracts
 
@@ -112,3 +128,24 @@ external PostgreSQL service, `examples/values-internal-longhorn.yaml` for the
 production internal profile, `examples/values-internal-local-path.yaml` only for
 a single-node/test cluster, and `examples/values-harbor.yaml` after mirroring
 both images to Harbor.
+
+## Installation and acceptance
+
+Do not install an example profile without a site overlay. From the source root,
+copy `deploy/helm/mm-bot-manager/examples/values-site.yaml.example` into the ignored root `values-site.yaml`,
+replace every placeholder, then run:
+
+```bash
+chart=deploy/helm/mm-bot-manager
+profile="$chart/examples/values-internal-longhorn.yaml"
+./scripts/verify-kubernetes-site.sh "$profile" values-site.yaml
+helm upgrade --install mm-bot-manager "$chart" --namespace mm-bot-manager \
+  --values "$profile" --values values-site.yaml --atomic --wait --timeout=10m
+```
+
+This block runs from the source root; from an unpacked chart, use `.` for the
+chart and the equivalent edited overlay. Scripts and the full runbook live in the
+source checkout, not the chart archive. `helm --wait` does not run a scheduled
+backup or prove the bot answers commands. Verify PVCs, authenticated WebSocket
+logs, `!help`/catalog permissions, persistent preferences and an actual backup plus
+isolated restore as described in the runbook.

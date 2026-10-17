@@ -12,6 +12,11 @@ bots they created through this manager.
 - [uv](https://docs.astral.sh/uv/) 0.11+
 - A Mattermost server and an admin who can create the manager bot account
 
+For Kubernetes, follow the [deployment runbook](docs/kubernetes.md). Installation
+requires an edited site overlay in addition to the database/storage profile.
+Internal PostgreSQL maintenance uses `scripts/kubernetes-db.sh`, with full archive
+verification and application-Pod termination checks before destructive restore.
+
 ## Mattermost setup
 
 ### 1. Enable bot account creation

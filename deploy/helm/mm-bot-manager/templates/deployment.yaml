@@ -4,6 +4,7 @@ metadata:
   name: {{ include "mm-bot-manager.fullname" . }}
   labels:
     {{- include "mm-bot-manager.labels" . | nindent 4 }}
+    app.kubernetes.io/component: application
 spec:
   replicas: 1
   strategy:
@@ -23,6 +24,7 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        app.kubernetes.io/component: application
     spec:
       serviceAccountName: {{ include "mm-bot-manager.serviceAccountName" . }}
       automountServiceAccountToken: false
@@ -44,6 +46,10 @@ spec:
               containerPort: {{ .Values.health.port }}
               protocol: TCP
           env:
+            {{- if .Values.mattermost.caBundle.existingConfigMap }}
+            - name: SSL_CERT_FILE
+              value: /etc/mm-bot-manager/ca/ca-bundle.crt
+            {{- end }}
             - name: MM_URL
               valueFrom:
                 configMapKeyRef:
@@ -147,9 +153,22 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.mattermost.caBundle.existingConfigMap }}
+            - name: mattermost-ca
+              mountPath: /etc/mm-bot-manager/ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if .Values.mattermost.caBundle.existingConfigMap }}
+        - name: mattermost-ca
+          configMap:
+            name: {{ .Values.mattermost.caBundle.existingConfigMap }}
+            items:
+              - key: {{ .Values.mattermost.caBundle.key }}
+                path: ca-bundle.crt
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
