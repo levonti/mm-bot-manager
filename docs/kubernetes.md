@@ -11,6 +11,22 @@ backups use separate retained PVCs. The application connects outbound to Matterm
 REST/WebSocket and has no inbound user API, application Service or Ingress.
 Port 8080 is a health interface bound to the Pod network, not a public endpoint.
 
+Follow this route for a **first installation**:
+
+1. [Choose and save the configuration](#1-prerequisites-and-site-configuration)
+   in `deployment.env`, then fill `values-site.yaml`.
+2. [Publish images and prepare registry access](#2-prepare-images-and-registry-authentication).
+3. [Create the application and selected database Secrets](#3-applicationdatabase-secrets-and-mattermost-ca).
+4. [Check and install the saved configuration](#4-validate-and-install-the-exact-configuration).
+5. [Complete acceptance](#5-acceptance-and-diagnosis), including a real backup verification.
+
+For an **existing installation**, keep the saved files, take a verified backup and
+follow [section 8](#8-upgrade-rollback-retained-storage-and-disaster-recovery).
+Do not repeat initial setup or recreate Secrets for an ordinary image upgrade.
+The `init` and `prepare-secret` helpers preserve existing files, including their
+permissions. They create missing copies with mode 0600. Edit existing files in
+place; do not replace them with the examples when resuming work.
+
 ## 1. Prerequisites and site configuration
 
 Before creating resources:
@@ -49,14 +65,31 @@ installation configuration.
 | Internal Harbor/closed contour | `values-harbor.yaml` | Both images mirrored to Harbor; Longhorn PVCs |
 | External PostgreSQL | `values-external.yaml` | Application image; database managed externally |
 
+**First installation only — prepare local files:**
+
 ```bash
-chart="deploy/helm/mm-bot-manager"
-profile="$chart/examples/values-internal-longhorn.yaml"
-site="values-site.yaml"
-cp "$chart/examples/values-site.yaml.example" "$site"
+./scripts/kubernetes-deploy.sh init
 ```
 
-Edit the copy and replace **every `CHANGE_ME`**: application repository and
+Edit `deployment.env` **once**: select `profile` from the table above and set
+`context` to the exact output of `kubectl config current-context`. There is no
+usable default profile: an unedited selection stops check/apply. For example,
+the single-node/test choice in that file is (edit the file, not the terminal):
+
+```dotenv
+profile="$chart/examples/values-internal-local-path.yaml"
+```
+
+Keep `chart` and `site` as generated unless you deliberately use other paths.
+`deployment.env` is a local Bash file: only load your own reviewed configuration.
+It contains paths and the kube-context, never credentials. It is ignored by Git
+and excluded from Docker/chart packaging. Preserve it together with the site
+overlay in approved configuration storage. Re-running `init` uses the saved
+`site` path and never resets the selected profile or overwrites the overlay.
+
+**Required for every profile — fill the site overlay:**
+
+Edit `values-site.yaml` and replace **every `CHANGE_ME`**: application repository and
 immutable tag/digest, PostgreSQL repository, real `mattermost.url`, approver and
 catalog viewer usernames. Set `defaultLanguage` to `ru` or `en`; users can later
 select `!language ru|en|auto` and `!catalog --format cards|table`. Keep
@@ -110,8 +143,9 @@ Create the namespace idempotently:
 kubectl create namespace mm-bot-manager --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-Create or rotate the pull Secret using an isolated Docker configuration. The
-password is read at a hidden prompt and passed only on stdin; it never becomes a
+**Private registry only:** create or rotate the pull Secret using an isolated
+Docker configuration. The password is read at a hidden prompt and passed only on
+stdin; it never becomes a
 process argument. The temporary credential file is mode 0600 inside a private
 directory and is removed on exit. Do not enable shell tracing (`set -x`).
 
@@ -143,40 +177,64 @@ separately during an approved maintenance window.
 
 ## 3. Application/database Secrets and Mattermost CA
 
-Working env copies must contain real values only locally. With `umask 077`, copy
-and edit the examples using an editor; never paste credentials into shell commands,
-values, logs or tickets. The Secret creation pipelines below do not print values.
+Working env copies must contain real values only locally. Prepare missing copies
+with the helper and edit them using an editor; never paste credentials into shell
+commands, values, logs or tickets. Ensure existing env files have mode 0600 before
+entering secrets. The Secret creation pipelines below do not print values.
+
+**Required for every profile — application Secret:**
 
 ```bash
-umask 077
-cp deploy/helm/mm-bot-manager/examples/app-secret.env.example app-secret.env
-chmod 0600 app-secret.env
-# Edit MM_TOKEN and MM_BOT_TOKEN before continuing.
-kubectl -n mm-bot-manager create secret generic mm-bot-manager-app \
-  --from-env-file=app-secret.env --dry-run=client -o yaml | kubectl apply -f -
+./scripts/kubernetes-deploy.sh prepare-secret app
 ```
 
-**Internal mode:** use exactly `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`.
+Edit `MM_TOKEN` and `MM_BOT_TOKEN` in `app-secret.env`. **After saving real values**,
+apply the Secret in a separate step:
+
+```bash
+(
+  set -euo pipefail
+  kubectl -n mm-bot-manager create secret generic mm-bot-manager-app \
+    --from-env-file=app-secret.env --dry-run=client -o yaml | kubectl apply -f -
+)
+```
+
+**Internal database only — skip for external mode:** use exactly `POSTGRES_USER`,
+`POSTGRES_PASSWORD`, `POSTGRES_DB`.
 Choose a dedicated database name, not `postgres`, `template0` or `template1`.
 The chart passes these values as `DB_USER`, `DB_PASSWORD`, `DB_NAME` to the
 application, with the internal Service as `DB_HOST`; it does not construct a URL.
 
 ```bash
-cp deploy/helm/mm-bot-manager/examples/internal-db-secret.env.example internal-db-secret.env
-chmod 0600 internal-db-secret.env
-# Edit the password and, if necessary, the dedicated username/database name.
-kubectl -n mm-bot-manager create secret generic mm-bot-manager-postgresql \
-  --from-env-file=internal-db-secret.env --dry-run=client -o yaml | kubectl apply -f -
+./scripts/kubernetes-deploy.sh prepare-secret internal-db
 ```
 
-**External mode only:** use the operator-supplied TLS-appropriate `DB_URL`.
+Edit the password and, if necessary, the dedicated username/database name in
+`internal-db-secret.env`. **After saving real values**, apply:
 
 ```bash
-cp deploy/helm/mm-bot-manager/examples/external-db-secret.env.example external-db-secret.env
-chmod 0600 external-db-secret.env
-# Edit DB_URL before continuing.
-kubectl -n mm-bot-manager create secret generic mm-bot-manager-external-db \
-  --from-env-file=external-db-secret.env --dry-run=client -o yaml | kubectl apply -f -
+(
+  set -euo pipefail
+  kubectl -n mm-bot-manager create secret generic mm-bot-manager-postgresql \
+    --from-env-file=internal-db-secret.env --dry-run=client -o yaml | kubectl apply -f -
+)
+```
+
+**External database only — skip for internal mode:** use the operator-supplied
+TLS-appropriate `DB_URL`.
+
+```bash
+./scripts/kubernetes-deploy.sh prepare-secret external-db
+```
+
+Edit `DB_URL` in `external-db-secret.env`. **After saving the real value**, apply:
+
+```bash
+(
+  set -euo pipefail
+  kubectl -n mm-bot-manager create secret generic mm-bot-manager-external-db \
+    --from-env-file=external-db-secret.env --dry-run=client -o yaml | kubectl apply -f -
+)
 ```
 
 Check **key names only**, substituting the relevant Secret name:
@@ -195,7 +253,7 @@ coordinate `ALTER ROLE`, then update the matching Secret and restart clients and
 the StatefulSet in a maintenance window. Never change `POSTGRES_USER`/`POSTGRES_DB`
 on an existing data PVC as if it were an initialization procedure.
 
-For a private **Mattermost** CA (separate from registry trust), create a ConfigMap
+**Private Mattermost CA only — skip for a publicly trusted endpoint:** create a ConfigMap
 containing a complete PEM trust bundle: the organization's CA chain plus any
 public roots required by your endpoint. Configure `mattermost.caBundle.existingConfigMap`
 as `mm-bot-manager-ca` in the site overlay, keeping `verifySSL: true`.
@@ -213,64 +271,49 @@ private key. Publicly trusted Mattermost needs no additional bundle.
 
 ## 4. Validate and install the exact configuration
 
-Use the same **profile followed by site overlay** for validation, installation and
-upgrades. The site validator rejects built-in image/URL placeholders; rendering
-alone does not test image availability, real credentials or network/storage health.
+**Every installation and upgrade:** use the saved `deployment.env`. Do not set
+`profile` again here. The commands work in a new terminal because the helper
+reloads the saved file on every invocation, discarding any inherited shell values.
+
+First run the read-only checks:
 
 ```bash
-chart="deploy/helm/mm-bot-manager"
-profile="$chart/examples/values-internal-longhorn.yaml"
-site="values-site.yaml"
-./scripts/verify-kubernetes-site.sh "$profile" "$site"
-helm template mm-bot-manager "$chart" --namespace mm-bot-manager \
-  --values "$profile" --values "$site" | kubectl -n mm-bot-manager apply --dry-run=server -f -
-case "$(helm version --template '{{.Version}}')" in
-  v3.*) rollback_flag=--atomic ;;
-  v4.*) rollback_flag=--rollback-on-failure ;;
-  *) printf '%s\n' 'Helm 3 or 4 is required' >&2; exit 1 ;;
-esac
-helm upgrade --install mm-bot-manager "$chart" --namespace mm-bot-manager \
-  --values "$profile" --values "$site" \
-  "$rollback_flag" --wait --wait-for-jobs --timeout=10m
+./scripts/kubernetes-deploy.sh check
 ```
 
-For `local-path`, Harbor or external mode change `profile` to the selected file
-from section 1. Never install an unedited example directly. Before deployment to
-a disconnected cluster, validate manifests with local Kubernetes schemas using
+Review the printed **context, namespace, release, profile, site overlay, database
+mode and effective data/backup StorageClasses**. The storage summary includes
+site overrides; external mode has no internal StorageClasses. If a choice is
+wrong, edit the saved files in section 1 and repeat `check`.
+
+**Only after the summary and checks are correct — install/upgrade:**
+
+```bash
+./scripts/kubernetes-deploy.sh apply
+```
+
+`apply` repeats all checks before Helm changes anything. Both commands require
+that the active kube-context matches the saved context; the server-side dry run
+and installation also explicitly target that context. The namespace and release
+are `mm-bot-manager`, as in the remaining commands in this runbook.
+
+The helper runs with `set -euo pipefail`: missing/unconfigured files, unsupported
+Helm, failed site validation, failed rendering or failed server-side dry run
+stop the operation **before installation**. It always uses profile first, then
+site overlay, with Helm 3 `--atomic` or Helm 4 `--rollback-on-failure`, plus
+`--wait --wait-for-jobs --timeout=10m`. The site validator
+(`scripts/verify-kubernetes-site.sh`) rejects built-in image/URL placeholders;
+rendering alone does not test image availability, real credentials or
+network/storage health.
+
+Before deployment to a disconnected cluster, validate manifests with local
+Kubernetes schemas using
 `KUBECONFORM_SCHEMA_LOCATION=/path/to/1.21.1-schemas ./scripts/verify-kubernetes.sh`.
-The server-side dry run also catches the destination cluster's admission policies;
-it creates no persistent objects. Initial storage provisioning can need more than
-Helm's default five minutes, hence the explicit timeout.
-
-Chart 0.1.2 adds an ordinary `backup-pvc-check-<revision>` Job whenever internal
-backups are enabled. It mounts the backup PVC immediately, allowing
-`WaitForFirstConsumer` storage to provision before the first scheduled backup.
-The Job writes, reads back and deletes a unique temporary file with restrictive
-permissions. It does not connect to PostgreSQL, read database Secrets, create a
-dump or change existing archives. It inherits the backup CronJob's PostgreSQL
-image/digest, pull policy, image pull Secrets, resources and writable mount.
-
-Keep `--wait --wait-for-jobs` and the version-appropriate rollback flag together:
-`--wait` alone can accept a Bound PVC before its write check completes. Do not
-move this consumer into a `post-install` hook, which runs after the readiness
-wait. A new Helm revision creates a new check Job, so image/spec changes do not
-patch an immutable Job template. Helm removes the previous check Job during
-upgrade; the latest Job/logs remain for diagnosis until the next upgrade or
-uninstall. There is no TTL cleanup or `keep` policy on this Job. The check has
-`backoffLimit: 0` and `activeDeadlineSeconds: 600`; fix the cause and retry the
-upgrade after failure. Automatic rollback can remove the failed revision's Job.
-
-For `local-path`, the first consumer determines the backup volume's node. The
-check and backup CronJob currently have no explicit scheduling constraints; keep
-them compatible if adding node selectors, affinity or tolerations later. Increasing
-the timeout cannot supply a missing consumer. Disabling backups or selecting
-external PostgreSQL creates no PVC-check Job.
-
-Upgrading from chart 0.1.0 adds the `application` component label without changing
-the immutable Deployment selector. Wait for that rollout before using the database
-maintenance helper. Helper operations render Jobs using **`helm get values --all`
-from the installed release**, preserving its image digests, pull Secrets, database
-Secret names and PVC overrides. They do not fall back to a different example file.
+The server-side dry run also checks the destination cluster's admission policies
+and creates no persistent objects. The explicit timeout allows initial storage
+provisioning more time than Helm's default five minutes. See the
+[PVC-check implementation notes](#appendix-pvc-check-and-upgrade-implementation-notes)
+for the reasons behind the wait flags and Job lifecycle.
 
 ## 5. Acceptance and diagnosis
 
@@ -444,8 +487,23 @@ kubectl -n mm-bot-manager patch cronjob mm-bot-manager-backup \
 
 ## 8. Upgrade, rollback, retained storage and disaster recovery
 
-Upgrade with the same profile and site overlay after validation from section 4.
-Check the application/PostgreSQL image changes and take a verified backup first.
+For an ordinary upgrade, keep `deployment.env` and edit the immutable application
+image tag/digest in the existing site overlay. Do not rerun initial file copying
+or Secret creation. Check the application/PostgreSQL image changes and take a
+verified backup first, then use the same commands as the initial installation:
+
+```bash
+./scripts/kubernetes-deploy.sh check
+```
+
+Review the saved selection and effective storage summary, then:
+
+```bash
+./scripts/kubernetes-deploy.sh apply
+```
+
+Do not change the database mode or StorageClasses as part of an ordinary image
+upgrade. A deliberate storage/profile migration needs its own reviewed procedure.
 Do not change PostgreSQL major versions on the existing PVC without a separate
 migration procedure. Inspect Helm history before rolling back an application/chart
 revision; rollback cannot reverse a database migration or restore.
@@ -473,7 +531,11 @@ node loses both local volumes.
 
 Chart/workflow regression tests run with the normal test suite. They render actual
 Jobs and simulate API failures, terminating Pods, locks and previous suspend/replica
-states. PVC-check tests execute its rendered shell script against disposable local
+states. Deployment workflow tests run the documented commands with real Helm
+rendering and a fake cluster. They check all four saved profiles, reuse in a new
+shell, site overrides, non-overwriting preparation, context mismatch and stopping
+before installation after validation/render/dry-run failures.
+PVC-check tests execute its rendered shell script against disposable local
 files, checking success, storage failures, temporary-file cleanup and archive
 preservation; render tests cover revisions and Harbor settings. These do not
 exercise Kubernetes scheduling or dynamic provisioning. A separate test executes
@@ -483,10 +545,42 @@ archive catalog, and checks cleanup without touching an operator database.
 
 ```bash
 uv sync --frozen --extra postgres
-uv run --no-sync pytest -q tests/test_helm_chart.py tests/test_backup_pvc_check.py tests/test_kubernetes_runbook.py
+uv run --no-sync pytest -q tests/test_helm_chart.py tests/test_backup_pvc_check.py tests/test_kubernetes_runbook.py tests/test_kubernetes_deploy.py
 MM_TEST_BACKUP_DOCKER=1 uv run --no-sync pytest -q tests/test_kubernetes_backup_roundtrip.py
 ```
 
 The Docker drill is opt-in and skipped by the standard CI job, which has only a
 PostgreSQL service. Report it separately from chart/schema tests and any live
 cluster acceptance; none of these substitutes for storage/node-loss recovery.
+
+## Appendix: PVC-check and upgrade implementation notes
+
+Chart 0.1.2 adds an ordinary `backup-pvc-check-<revision>` Job whenever internal
+backups are enabled. It mounts the backup PVC immediately, allowing
+`WaitForFirstConsumer` storage to provision before the first scheduled backup.
+The Job writes, reads back and deletes a unique temporary file with restrictive
+permissions. It does not connect to PostgreSQL, read database Secrets, create a
+dump or change existing archives. It inherits the backup CronJob's PostgreSQL
+image/digest, pull policy, image pull Secrets, resources and writable mount.
+
+Keep `--wait --wait-for-jobs` and the version-appropriate rollback flag together:
+`--wait` alone can accept a Bound PVC before its write check completes. Do not
+move this consumer into a `post-install` hook, which runs after the readiness
+wait. A new Helm revision creates a new check Job, so image/spec changes do not
+patch an immutable Job template. Helm removes the previous check Job during
+upgrade; the latest Job/logs remain for diagnosis until the next upgrade or
+uninstall. There is no TTL cleanup or `keep` policy on this Job. The check has
+`backoffLimit: 0` and `activeDeadlineSeconds: 600`; fix the cause and retry the
+upgrade after failure. Automatic rollback can remove the failed revision's Job.
+
+For `local-path`, the first consumer determines the backup volume's node. The
+check and backup CronJob currently have no explicit scheduling constraints; keep
+them compatible if adding node selectors, affinity or tolerations later. Increasing
+the timeout cannot supply a missing consumer. Disabling backups or selecting
+external PostgreSQL creates no PVC-check Job.
+
+Upgrading from chart 0.1.0 adds the `application` component label without changing
+the immutable Deployment selector. Wait for that rollout before using the database
+maintenance helper. Helper operations render Jobs using **`helm get values --all`
+from the installed release**, preserving its image digests, pull Secrets, database
+Secret names and PVC overrides. They do not fall back to a different example file.

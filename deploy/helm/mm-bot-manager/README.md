@@ -131,23 +131,29 @@ both images to Harbor.
 
 ## Installation and acceptance
 
-Do not install an example profile without a site overlay. From the source root,
-copy `deploy/helm/mm-bot-manager/examples/values-site.yaml.example` into the ignored root `values-site.yaml`,
-replace every placeholder, then run:
+Do not install an example profile without a site overlay. For a source checkout,
+follow `docs/kubernetes.md`: run `./scripts/kubernetes-deploy.sh init`, then edit
+`deployment.env` once to choose the profile and kube-context, and fill the site
+overlay. `init` preserves existing files. Prepare images, namespace and Secrets
+before checking the installation.
 
 ```bash
-chart=deploy/helm/mm-bot-manager
-profile="$chart/examples/values-internal-longhorn.yaml"
-./scripts/verify-kubernetes-site.sh "$profile" values-site.yaml
-case "$(helm version --template '{{.Version}}')" in
-  v3.*) rollback_flag=--atomic ;;
-  v4.*) rollback_flag=--rollback-on-failure ;;
-  *) printf '%s\n' 'Helm 3 or 4 is required' >&2; exit 1 ;;
-esac
-helm upgrade --install mm-bot-manager "$chart" --namespace mm-bot-manager \
-  --values "$profile" --values values-site.yaml \
-  "$rollback_flag" --wait --wait-for-jobs --timeout=10m
+./scripts/kubernetes-deploy.sh check
 ```
+
+Review the context, profile, database mode and effective StorageClasses, then:
+
+```bash
+./scripts/kubernetes-deploy.sh apply
+```
+
+Both commands reload the saved configuration, including in a new terminal. There
+is no second profile assignment. `apply` repeats site validation and the
+server-side dry run, stopping on any failure before installation. It uses the
+Helm-version-appropriate rollback flag and waits for Jobs. For an upgrade, edit
+the existing overlay, take a verified backup, then repeat these two commands.
+The helper belongs to the source checkout; a standalone packaged chart does not
+include repository scripts or the operator's local `deployment.env`.
 
 With internal backups enabled, an ordinary `backup-pvc-check-<revision>` Job
 mounts the backup PVC immediately. This supplies the first consumer required by

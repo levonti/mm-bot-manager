@@ -39,6 +39,7 @@ report.xml
 /external-db-secret.env
 /internal-db-secret.env
 /values-site.yaml
+/deployment.env
 /harbor-auth/
 deploy/helm/**/examples/*.env
 
