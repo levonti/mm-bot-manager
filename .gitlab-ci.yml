@@ -24,7 +24,7 @@ verify:
     paths:
       - .uv-cache/
   before_script:
-    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl
+    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git
     - |
       case "$(uname -m)" in
         x86_64) helm_arch=amd64 ;;
