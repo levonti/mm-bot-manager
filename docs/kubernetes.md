@@ -1,9 +1,9 @@
 # Kubernetes deployment runbook
 
-Deploy `mm-bot-manager` with Helm 3 on Kubernetes `>= 1.21.1`, using either an
+Deploy `mm-bot-manager` with Helm 3 or 4 on Kubernetes `>= 1.21.1`, using either an
 external PostgreSQL service or one internal PostgreSQL StatefulSet. The chart has
 no Helm dependencies. All commands below run in **Bash from the repository root**.
-The helper scripts require Bash, Helm 3 and kubectl; no Python installation is
+The helper scripts require Bash, Helm and kubectl; no Python installation is
 needed on the operator's workstation.
 
 The internal database has **one replica and no HA failover**. Data and logical
@@ -224,8 +224,14 @@ site="values-site.yaml"
 ./scripts/verify-kubernetes-site.sh "$profile" "$site"
 helm template mm-bot-manager "$chart" --namespace mm-bot-manager \
   --values "$profile" --values "$site" | kubectl -n mm-bot-manager apply --dry-run=server -f -
+case "$(helm version --template '{{.Version}}')" in
+  v3.*) rollback_flag=--atomic ;;
+  v4.*) rollback_flag=--rollback-on-failure ;;
+  *) printf '%s\n' 'Helm 3 or 4 is required' >&2; exit 1 ;;
+esac
 helm upgrade --install mm-bot-manager "$chart" --namespace mm-bot-manager \
-  --values "$profile" --values "$site" --atomic --wait --timeout=10m
+  --values "$profile" --values "$site" \
+  "$rollback_flag" --wait --wait-for-jobs --timeout=10m
 ```
 
 For `local-path`, Harbor or external mode change `profile` to the selected file
@@ -235,6 +241,30 @@ a disconnected cluster, validate manifests with local Kubernetes schemas using
 The server-side dry run also catches the destination cluster's admission policies;
 it creates no persistent objects. Initial storage provisioning can need more than
 Helm's default five minutes, hence the explicit timeout.
+
+Chart 0.1.2 adds an ordinary `backup-pvc-check-<revision>` Job whenever internal
+backups are enabled. It mounts the backup PVC immediately, allowing
+`WaitForFirstConsumer` storage to provision before the first scheduled backup.
+The Job writes, reads back and deletes a unique temporary file with restrictive
+permissions. It does not connect to PostgreSQL, read database Secrets, create a
+dump or change existing archives. It inherits the backup CronJob's PostgreSQL
+image/digest, pull policy, image pull Secrets, resources and writable mount.
+
+Keep `--wait --wait-for-jobs` and the version-appropriate rollback flag together:
+`--wait` alone can accept a Bound PVC before its write check completes. Do not
+move this consumer into a `post-install` hook, which runs after the readiness
+wait. A new Helm revision creates a new check Job, so image/spec changes do not
+patch an immutable Job template. Helm removes the previous check Job during
+upgrade; the latest Job/logs remain for diagnosis until the next upgrade or
+uninstall. There is no TTL cleanup or `keep` policy on this Job. The check has
+`backoffLimit: 0` and `activeDeadlineSeconds: 600`; fix the cause and retry the
+upgrade after failure. Automatic rollback can remove the failed revision's Job.
+
+For `local-path`, the first consumer determines the backup volume's node. The
+check and backup CronJob currently have no explicit scheduling constraints; keep
+them compatible if adding node selectors, affinity or tolerations later. Increasing
+the timeout cannot supply a missing consumer. Disabling backups or selecting
+external PostgreSQL creates no PVC-check Job.
 
 Upgrading from chart 0.1.0 adds the `application` component label without changing
 the immutable Deployment selector. Wait for that rollout before using the database
@@ -265,11 +295,23 @@ curl --fail http://127.0.0.1:8080/health/ready
 ```
 
 Both endpoints currently check the database connection. A 200 response proves DB
-reachability, **not a connected/authenticated Mattermost WebSocket**. Acceptance
-requires all of the following:
+reachability, **not a connected/authenticated Mattermost WebSocket**.
+
+With internal backups enabled, also inspect the completed PVC-check Job:
+
+```bash
+check_selector='app.kubernetes.io/instance=mm-bot-manager,app.kubernetes.io/component=backup-pvc-check'
+kubectl -n mm-bot-manager get jobs -l "$check_selector"
+kubectl -n mm-bot-manager logs -l "$check_selector" -c backup-pvc-check --tail=20
+```
+
+Acceptance requires all of the following:
 
 1. All intended PVCs are Bound; PostgreSQL and application Pods are Ready, with no
    repeated restarts, image-pull, TLS, permission or volume-attachment errors.
+   With internal backups enabled, the PVC-check Job is Complete and its log says
+   `backup PVC write/read/delete check passed`. This proves mount access only;
+   the real backup and isolated restore in step 4 are still required.
 2. Application logs contain `logged_in` and `ws_authenticated`. In a DM, `!help`
    responds. An approver/viewer can read `!catalog`; an ordinary user is denied.
 3. Set `!language ru` and `!catalog --format table` as a permitted viewer, restart
@@ -410,7 +452,7 @@ revision; rollback cannot reverse a database migration or restore.
 
 ```bash
 helm -n mm-bot-manager history mm-bot-manager
-helm -n mm-bot-manager rollback mm-bot-manager REVISION --wait --timeout=10m
+helm -n mm-bot-manager rollback mm-bot-manager REVISION --wait --wait-for-jobs --timeout=10m
 ```
 
 Before uninstalling, stop maintenance/backup activity and export verified backups.
@@ -431,13 +473,17 @@ node loses both local volumes.
 
 Chart/workflow regression tests run with the normal test suite. They render actual
 Jobs and simulate API failures, terminating Pods, locks and previous suspend/replica
-states. A separate test executes the rendered PostgreSQL scripts in a disposable
-Docker server; it restores real data, rejects a truncated data stream with a valid
+states. PVC-check tests execute its rendered shell script against disposable local
+files, checking success, storage failures, temporary-file cleanup and archive
+preservation; render tests cover revisions and Harbor settings. These do not
+exercise Kubernetes scheduling or dynamic provisioning. A separate test executes
+the rendered PVC-check and PostgreSQL scripts in a disposable Docker server; it
+restores real data, rejects a truncated data stream with a valid
 archive catalog, and checks cleanup without touching an operator database.
 
 ```bash
 uv sync --frozen --extra postgres
-uv run --no-sync pytest -q tests/test_helm_chart.py tests/test_kubernetes_runbook.py
+uv run --no-sync pytest -q tests/test_helm_chart.py tests/test_backup_pvc_check.py tests/test_kubernetes_runbook.py
 MM_TEST_BACKUP_DOCKER=1 uv run --no-sync pytest -q tests/test_kubernetes_backup_roundtrip.py
 ```
 

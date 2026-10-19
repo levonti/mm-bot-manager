@@ -1,0 +1,53 @@
+{{- if and (eq .Values.database.mode "internal") .Values.database.internal.backup.enabled }}
+{{- $suffix := printf "-backup-pvc-check-%d" .Release.Revision }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # A new revision must create a new Job instead of patching an immutable Pod template.
+  name: {{ printf "%s%s" (include "mm-bot-manager.fullname" . | trunc (int (sub 63 (len $suffix))) | trimSuffix "-") $suffix }}
+  labels:
+    {{- include "mm-bot-manager.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup-pvc-check
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "mm-bot-manager.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backup-pvc-check
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: backup-pvc-check
+          image: {{ include "mm-bot-manager.postgresImage" . }}
+          imagePullPolicy: {{ .Values.database.internal.image.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              set -eu
+              umask 077
+              temporary="$(mktemp /backups/.pvc-check.XXXXXX)"
+              trap 'rm -f "$temporary"' EXIT
+              trap 'exit 1' HUP INT TERM
+              printf '%s\n' 'mm-bot-manager backup PVC check' >"$temporary"
+              actual="$(cat "$temporary")"
+              test "$actual" = 'mm-bot-manager backup PVC check'
+              rm -f "$temporary"
+              trap - EXIT
+              printf '%s\n' 'backup PVC write/read/delete check passed'
+          resources:
+            {{- toYaml .Values.database.internal.backup.resources | nindent 12 }}
+          volumeMounts:
+            - name: backups
+              mountPath: /backups
+      volumes:
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ include "mm-bot-manager.backupFullname" . }}
+{{- end }}

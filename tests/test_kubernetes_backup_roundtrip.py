@@ -97,6 +97,23 @@ def test_rendered_backup_verification_and_restore_with_real_postgresql(tmp_path)
             assert result.exit_code == 0, result.output.decode()
         archives = sorted(tmp_path.glob("*.dump"))
         assert len(archives) == 2 and not list(tmp_path.glob("*.tmp"))
+        pvc_check = by_kind(
+            render(
+                "values-internal-local-path.yaml",
+                show_only="templates/backup-pvc-check-job.yaml",
+            ),
+            "Job",
+        )[0]["spec"]["template"]["spec"]["containers"][0]
+        # Exercise the rendered check with the PostgreSQL image's actual /bin/sh
+        # and filesystem tools, without passing database credentials to the check.
+        before_check = {path.name: path.read_bytes() for path in archives}
+        result = container.get_wrapped_container().exec_run(
+            [*pvc_check["command"], *pvc_check["args"]]
+        )
+        assert result.exit_code == 0, result.output.decode()
+        assert b"backup PVC write/read/delete check passed" in result.output
+        assert {path.name: path.read_bytes() for path in tmp_path.glob("*.dump")} == before_check
+        assert not list(tmp_path.glob(".pvc-check.*"))
         archive = archives[0].name
         verify_uid = "33333333-3333-3333-3333-333333333333"
         result = run(verification, VERIFY_FILE=archive, POD_UID=verify_uid)
