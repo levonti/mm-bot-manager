@@ -1,6 +1,6 @@
 # mm-bot-manager Helm chart
 
-This self-contained Helm 3 chart deploys one `mm-bot-manager` Pod to Kubernetes
+This self-contained Helm chart deploys one `mm-bot-manager` Pod to Kubernetes
 `>= 1.21.1`. It has no chart dependencies and is suitable for a disconnected
 cluster after the required images have been mirrored to its local registry.
 
@@ -11,7 +11,7 @@ health probes.
 
 ## Prerequisites
 
-- Kubernetes `>= 1.21.1` and Helm 3;
+- Kubernetes `>= 1.21.1` and Helm 3 or 4;
 - an already-created application Secret (`MM_TOKEN`, `MM_BOT_TOKEN`);
 - either an already-created external database Secret (`DB_URL`) or an
   already-created PostgreSQL Secret (`POSTGRES_USER`, `POSTGRES_PASSWORD`,
@@ -24,7 +24,7 @@ health probes.
 | Mode | Rendered resources | Required Secrets | Images |
 | --- | --- | --- | --- |
 | `database.mode=external` (default) | Deployment, ConfigMap, ServiceAccount | application, external database | application |
-| `database.mode=internal` | external resources plus headless PostgreSQL Service, 1-replica PostgreSQL StatefulSet and data PVC, backup PVC and CronJob (when enabled), optional restore Job | application, PostgreSQL | application, PostgreSQL |
+| `database.mode=internal` | external resources plus headless PostgreSQL Service, 1-replica PostgreSQL StatefulSet and data PVC, backup PVC, PVC-check Job and CronJob (when enabled), optional restore Job | application, PostgreSQL | application, PostgreSQL |
 
 The application Deployment is always one replica with `Recreate` strategy. The
 internal PostgreSQL StatefulSet is always one replica. Do not use the internal
@@ -67,7 +67,7 @@ the chart reads the listed fixed keys and does not create Secrets itself.
 | `database.internal.containerSecurityContext` | `{}` | PostgreSQL container security context. |
 | `database.internal.resources` | requests `100m/256Mi`, limits `1/1Gi` | PostgreSQL resources. |
 | `database.internal.probes` | startup `5s/3s/30`; readiness `10s/3s/3`; liveness `10s/3s/6` | PostgreSQL probe settings. |
-| `database.internal.backup` | enabled, `0 2 * * *`, 14 days, history `3/3`, `longhorn`, `ReadWriteOnce`, `5Gi`, requests `50m/64Mi`, limits `500m/256Mi` | Logical dump CronJob and retained backup PVC. |
+| `database.internal.backup` | enabled, `0 2 * * *`, 14 days, history `3/3`, `longhorn`, `ReadWriteOnce`, `5Gi`, requests `50m/64Mi`, limits `500m/256Mi` | Logical dump CronJob, retained backup PVC and automatic PVC-check Job. |
 | `database.internal.restore` | `enabled=false`, `file=""` | Opt-in one-time restore Job. The file must be a safe `.dump` basename. |
 | `database.internal.inspect` | `enabled=false` | Opt-in archive inspection Job with read-only backup PVC and inherited image pull Secrets. |
 | `database.internal.verification` | `enabled=false`, `file=""` | Opt-in full trial restore into a temporary database, followed by registry-table queries and cleanup. |
@@ -139,13 +139,38 @@ replace every placeholder, then run:
 chart=deploy/helm/mm-bot-manager
 profile="$chart/examples/values-internal-longhorn.yaml"
 ./scripts/verify-kubernetes-site.sh "$profile" values-site.yaml
+case "$(helm version --template '{{.Version}}')" in
+  v3.*) rollback_flag=--atomic ;;
+  v4.*) rollback_flag=--rollback-on-failure ;;
+  *) printf '%s\n' 'Helm 3 or 4 is required' >&2; exit 1 ;;
+esac
 helm upgrade --install mm-bot-manager "$chart" --namespace mm-bot-manager \
-  --values "$profile" --values values-site.yaml --atomic --wait --timeout=10m
+  --values "$profile" --values values-site.yaml \
+  "$rollback_flag" --wait --wait-for-jobs --timeout=10m
 ```
+
+With internal backups enabled, an ordinary `backup-pvc-check-<revision>` Job
+mounts the backup PVC immediately. This supplies the first consumer required by
+`WaitForFirstConsumer` storage such as `local-path`, without waiting for the backup
+schedule. It writes, reads back and deletes one uniquely named temporary file;
+existing archives are untouched. It uses the same PostgreSQL image, pull policy,
+pull Secrets, resources and writable mount as the backup CronJob, with no database
+credentials or connection. It has a ten-minute deadline and no retries.
+
+Keep both `--wait` and `--wait-for-jobs`: Helm must wait for the successful file
+check as well as PVC binding. Helm 3 uses `--atomic`; Helm 4 uses
+`--rollback-on-failure`. The Job is not a hook: a `post-install` hook would run
+after Helm's readiness wait and could not unblock the PVC. A new revision creates
+a new Job, avoiding immutable-template updates. Helm removes the previous check
+Job during upgrade; the latest Job and its logs remain until the next upgrade or
+uninstall. The check Job has no `keep` annotation; the backup PVC remains retained.
+On `local-path`, the
+first consumer selects the volume's node; keep the check and backup CronJob's
+scheduling compatible. Neither currently sets explicit scheduling constraints.
 
 This block runs from the source root; from an unpacked chart, use `.` for the
 chart and the equivalent edited overlay. Scripts and the full runbook live in the
-source checkout, not the chart archive. `helm --wait` does not run a scheduled
-backup or prove the bot answers commands. Verify PVCs, authenticated WebSocket
-logs, `!help`/catalog permissions, persistent preferences and an actual backup plus
+source checkout, not the chart archive. A successful PVC check does not create a
+database backup or prove the bot answers commands. Verify PVCs, authenticated
+WebSocket logs, `!help`/catalog permissions, persistent preferences and an actual backup plus
 isolated restore as described in the runbook.

@@ -335,6 +335,62 @@ def test_runbook_commands_have_valid_bash_and_no_password_argument():
     assert "health" in text and "not a connected/authenticated" in text
 
 
+@pytest.mark.parametrize("document", ["docs/kubernetes.md", "deploy/helm/mm-bot-manager/README.md"])
+@pytest.mark.parametrize(
+    "version,rollback_flag",
+    [("v3.17.4", "--atomic"), ("v4.1.4", "--rollback-on-failure"), ("v2.17.0", None)],
+)
+def test_documented_install_waits_for_jobs_with_the_correct_helm_rollback_flag(
+    tmp_path, monkeypatch, document, version, rollback_flag
+):
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    audit = tmp_path / "helm-upgrade.json"
+    monkeypatch.setenv("INSTALL_TEST_VERSION", version)
+    monkeypatch.setenv("INSTALL_TEST_AUDIT", str(audit))
+    monkeypatch.setenv("PATH", f"{tools}:{os.environ['PATH']}")
+    helm = tools / "helm"
+    helm.write_text(
+        f"#!{sys.executable}\n"
+        + r"""
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+if args[0] == 'version':
+    print(os.environ['INSTALL_TEST_VERSION'])
+elif args[:2] == ['upgrade', '--install']:
+    Path(os.environ['INSTALL_TEST_AUDIT']).write_text(json.dumps(args))
+elif args[0] != 'template':
+    raise SystemExit('Unexpected Helm command: ' + repr(args))
+"""
+    )
+    helm.chmod(0o755)
+    kubectl = tools / "kubectl"
+    kubectl.write_text("#!/bin/sh\ncat >/dev/null\n")
+    kubectl.chmod(0o755)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    validator = scripts / "verify-kubernetes-site.sh"
+    validator.write_text("#!/bin/sh\nexit 0\n")
+    validator.chmod(0o755)
+    text = (ROOT / document).read_text()
+    block = next(
+        section.split("```", 1)[0]
+        for section in text.split("```bash\n")[1:]
+        if "helm upgrade --install" in section.split("```", 1)[0]
+    )
+    result = subprocess.run(
+        ["bash", "-c", block], cwd=tmp_path, capture_output=True, text=True, timeout=10
+    )
+    if rollback_flag is None:
+        assert result.returncode != 0 and not audit.exists()
+        return
+    assert result.returncode == 0, result.stderr
+    arguments = json.loads(audit.read_text())
+    assert {rollback_flag, "--wait", "--wait-for-jobs", "--timeout=10m"} <= set(arguments)
+    assert ("--atomic" in arguments) != ("--rollback-on-failure" in arguments)
+
+
 @pytest.mark.parametrize(
     "operation,kind", [("backup", "backup"), ("inspect", "inspect"), ("verify", "verification")]
 )

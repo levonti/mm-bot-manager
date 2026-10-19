@@ -19,14 +19,16 @@ def schema_diagnostic(result: subprocess.CompletedProcess[str]) -> str:
     return result.stderr.replace(".", "/")
 
 
-def render(values: str, *extra: str, show_only: str | None = None) -> list[dict[str, Any]]:
+def render(
+    values: str, *extra: str, show_only: str | None = None, chart: Path = CHART
+) -> list[dict[str, Any]]:
     show_only_args = ["--show-only", show_only] if show_only is not None else []
     result = subprocess.run(
         [
             str(HELM),
             "template",
             "mmbot",
-            str(CHART),
+            str(chart),
             "--namespace",
             "mmbot",
             "--kube-version",
@@ -164,7 +166,10 @@ def test_internal_application_uses_component_database_settings() -> None:
 
 
 def test_restore_job_requires_an_explicit_safe_filename() -> None:
-    assert by_kind(render("values-internal-longhorn.yaml"), "Job") == []
+    assert all(
+        job["metadata"]["labels"]["app.kubernetes.io/component"] != "restore"
+        for job in by_kind(render("values-internal-longhorn.yaml"), "Job")
+    )
 
     resources = render(
         "values-internal-longhorn.yaml",
@@ -201,7 +206,7 @@ def test_restore_job_requires_an_explicit_safe_filename() -> None:
 def workload_images(resources: list[dict[str, Any]]) -> list[str]:
     images: list[str] = []
     for resource in resources:
-        if resource["kind"] in {"Deployment", "StatefulSet"}:
+        if resource["kind"] in {"Deployment", "StatefulSet", "Job"}:
             pod = resource["spec"]["template"]["spec"]
         elif resource["kind"] == "CronJob":
             pod = resource["spec"]["jobTemplate"]["spec"]["template"]["spec"]
