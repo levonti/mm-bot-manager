@@ -1,3 +1,7 @@
+# Repositories use host[:port]/project/image without an http:// or https:// prefix.
+# Configure HTTP or HTTPS/private-CA trust on builders and every eligible node;
+# imagePullSecrets provide authentication only. See docs/kubernetes.md section 2
+# in the source checkout. For HTTP on port 8080, include :8080 in both repositories.
 image:
   repository: harbor.internal.example/platform/mm-bot-manager
   tag: "0.1.0"

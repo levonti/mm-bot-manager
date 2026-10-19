@@ -50,7 +50,7 @@ Before creating resources:
 
 ```bash
 kubectl config current-context
-kubectl get nodes -o custom-columns=NAME:.metadata.name,ARCH:.status.nodeInfo.architecture
+kubectl get nodes -o custom-columns=NAME:.metadata.name,ARCH:.status.nodeInfo.architecture,RUNTIME:.status.nodeInfo.containerRuntimeVersion
 kubectl get storageclass
 ```
 
@@ -86,6 +86,7 @@ All new persistent operator files go into **`.local/kubernetes/`**:
 .local/kubernetes/
   deployment.env
   values-site.yaml
+  buildkitd.toml                    # optional dedicated BuildKit configuration
   app-secret.env
   internal-db-secret.env OR external-db-secret.env
   images/images.tar
@@ -155,22 +156,285 @@ configuration storage for future upgrades.
 
 ## 2. Prepare images and registry authentication
 
-Build on a connected staging machine for the **cluster architecture**, not
-implicitly for the build laptop. For a mixed cluster publish a multi-platform
-image with `docker buildx build --platform linux/amd64,linux/arm64 --push` instead.
-For example, for AMD64 nodes:
+### 2.1 Select HTTP or HTTPS and configure each client
+
+Complete transport configuration **before login, build or push** on the staging
+and destination workstations, and before pulling on Kubernetes nodes. Record the
+actual registry authority (`host[:port]`) and externally reachable scheme/port:
+
+| Harbor endpoint | Required client configuration |
+| --- | --- |
+| HTTPS, publicly trusted certificate | Normal HTTPS; no insecure-registry exception |
+| HTTPS, private CA | Install the Harbor CA chain in each relevant client/runtime; keep certificate verification enabled |
+| HTTP | Explicit HTTP configuration for this exact authority in Docker, the selected BuildKit builder and every relevant node runtime |
+
+HTTP sends credentials, tokens and image traffic without TLS protection. Use it
+only for an approved isolated test/development contour; prefer HTTPS in production.
+See [Harbor's HTTPS guidance](https://goharbor.io/docs/2.14.0/install-config/configure-https/).
+The examples use `harbor.internal.example:8080` for HTTP and
+`harbor.internal.example` for HTTPS. Replace the authority **consistently** in
+runtime configuration, login, image names and pull credentials, including any
+explicit port. A browser opening the Harbor UI does not prove `/v2/` or the token
+service is reachable from a builder or node. Behind a proxy, the Harbor operator
+must also verify its advertised external URL and authentication endpoint.
+
+Image names and `registry` variables contain **no `http://` or `https://`**:
+`harbor.internal.example:8080/platform/mm-bot-manager:TAG`. Schemes belong in
+transport endpoint settings. `imagePullSecrets` supply authentication; they do
+not select HTTP or install CA trust. `mattermost.verifySSL`, `mattermost.caBundle`
+and the application's `SSL_CERT_FILE` apply to Mattermost, not registry pulls.
+The chart uses normal image references with the selected authority; configure
+registry transport in the clients/runtimes above.
+
+The following are **configuration fragments**, not replacement files. Preserve
+existing daemon settings, mirrors and registry entries. Inspect the selected
+Docker context/builder and node runtime version first. Back up the affected
+configuration and plan any required service refresh with the cluster operator;
+do not restart all nodes together. A failed check requires restoring the previous
+configuration and following that runtime's maintenance procedure.
+
+**Docker Engine / Docker-backed nodes:** for HTTP, merge this entry into the
+selected daemon's configuration (Linux default `/etc/docker/daemon.json`):
+
+```json
+{
+  "insecure-registries": ["harbor.internal.example:8080"]
+}
+```
+
+Apply it using that platform's Docker maintenance procedure. With Docker Desktop
+or a remote Docker context, configure the actual backend daemon, not an unrelated
+host file. For HTTPS with a private CA, instead install the CA chain at
+`/etc/docker/certs.d/harbor.internal.example/ca.crt` on a Linux Docker daemon;
+include `:port` in the directory name when the authority includes it. Keep HTTPS
+registries out of the HTTP exception list. Verify the active daemon/context with
+`docker context show` and `docker info`. See
+[Docker insecure registries](https://docs.docker.com/reference/cli/dockerd/#insecure-registries)
+and [registry certificates](https://docs.docker.com/engine/security/certificates/).
+
+**Buildx / standalone BuildKit:** a `docker-container` builder has its own
+registry transport configuration; configuring Docker Engine alone is insufficient.
+After `init`, save the selected fragment as `.local/kubernetes/buildkitd.toml`.
+For HTTP:
+
+```toml
+[registry."harbor.internal.example:8080"]
+  http = true
+```
+
+For HTTPS with a private CA, use this instead (the CA file must exist on the
+workstation creating the builder):
+
+```toml
+[registry."harbor.internal.example"]
+  ca = ["/protected/config/harbor-ca.crt"]
+```
+
+Do not combine `http = true` with `insecure = true`; the latter bypasses HTTPS
+certificate verification and is not the HTTP setting. For publicly trusted HTTPS,
+no registry override is needed (an empty TOML file is sufficient when creating a
+builder for that route). Inspect `docker buildx ls` first; create the following
+dedicated builder only if its name is unused:
 
 ```bash
-registry="harbor.internal.example" # replace with the actual registry
-image_tag="$(git rev-parse --short=12 HEAD)"
-docker build --platform linux/amd64 -t "$registry/platform/mm-bot-manager:$image_tag" .
-docker push "$registry/platform/mm-bot-manager:$image_tag"
-docker pull --platform linux/amd64 postgres:15.18-alpine3.24
-docker tag postgres:15.18-alpine3.24 "$registry/library/postgres:15.18-alpine3.24"
-docker push "$registry/library/postgres:15.18-alpine3.24"
-docker image inspect "$registry/platform/mm-bot-manager:$image_tag" --format '{{json .RepoDigests}}'
-docker image inspect "$registry/library/postgres:15.18-alpine3.24" --format '{{json .RepoDigests}}'
+docker buildx create --name mm-bot-harbor --driver docker-container \
+  --buildkitd-config .local/kubernetes/buildkitd.toml
+docker buildx inspect mm-bot-harbor --bootstrap
 ```
+
+Select it explicitly with `docker buildx build --builder mm-bot-harbor ...` in
+the authenticated publishing session below. Bootstrap needs the BuildKit image;
+prepare an approved mirrored builder image if staging is disconnected. For an
+existing builder, review/recreate it through its own lifecycle so it actually
+uses the changed configuration. A standalone `buildkitd` uses its own config
+path. See [BuildKit registry settings](https://docs.docker.com/build/buildkit/toml-configuration/)
+and [Buildx builder configuration](https://docs.docker.com/build/buildkit/configure/).
+
+**Standalone containerd 1.5+ / 2.x nodes:** use the CRI plugin's registry
+configuration, not just Docker or `ctr` command-line flags. In the node's existing
+`/etc/containerd/config.toml`, enable the directory using the matching format.
+For containerd 1.x with config version 2:
+
+```toml
+[plugins."io.containerd.grpc.v1.cri".registry]
+  config_path = "/etc/containerd/certs.d"
+```
+
+For containerd 2.x with config version 3:
+
+```toml
+[plugins."io.containerd.cri.v1.images".registry]
+  config_path = "/etc/containerd/certs.d"
+```
+
+For HTTP, place the following in
+`/etc/containerd/certs.d/harbor.internal.example:8080/hosts.toml` on **each node
+that may run the application, PostgreSQL or maintenance Jobs**:
+
+```toml
+server = "http://harbor.internal.example:8080"
+[host."http://harbor.internal.example:8080"]
+  capabilities = ["pull", "resolve"]
+```
+
+For HTTPS with a private CA, use
+`/etc/containerd/certs.d/harbor.internal.example/hosts.toml` and install the CA
+chain at the referenced node-local path:
+
+```toml
+server = "https://harbor.internal.example"
+[host."https://harbor.internal.example"]
+  capabilities = ["pull", "resolve"]
+  ca = "/etc/containerd/certs.d/harbor.internal.example/ca.crt"
+```
+
+`skip_verify = true` only disables HTTPS certificate checks; it does not enable
+HTTP. Once `config_path` is active, changes under that hosts directory do not
+require a containerd restart; changing `config.toml` requires the platform's
+runtime refresh procedure. Do not mix `config_path` with legacy registry mirror
+configuration. Kubernetes `>= 1.21.1` does not imply containerd `>= 1.5`:
+older 1.3/1.4 installations using config version 2 need their legacy HTTP entry
+in `config.toml`, followed by a planned runtime refresh:
+
+```toml
+[plugins."io.containerd.grpc.v1.cri".registry.mirrors."harbor.internal.example:8080"]
+  endpoint = ["http://harbor.internal.example:8080"]
+```
+
+For legacy HTTPS/private-CA settings, use the version-matched
+[containerd 1.4 registry reference](https://github.com/containerd/cri/blob/release/1.4/docs/registry.md).
+See the modern [containerd hosts reference](https://github.com/containerd/containerd/blob/main/docs/hosts.md)
+for `config_path` and supported formats. Keep credentials in the Kubernetes pull
+Secret rather than adding passwords to these node configuration fragments.
+
+**K3s nodes:** use `/etc/rancher/k3s/registries.yaml` instead of editing generated
+containerd files. Merge the selected fragment on every relevant agent and on
+servers that run workloads. For HTTP:
+
+```yaml
+mirrors:
+  "harbor.internal.example:8080":
+    endpoint:
+      - "http://harbor.internal.example:8080"
+```
+
+For HTTPS with a private CA, use:
+
+```yaml
+mirrors:
+  "harbor.internal.example":
+    endpoint:
+      - "https://harbor.internal.example"
+configs:
+  "harbor.internal.example":
+    tls:
+      ca_file: /etc/rancher/k3s/harbor-ca.crt
+```
+
+Install that CA chain on each node. `insecure_skip_verify` is not an HTTP switch.
+K3s requires a planned restart of the affected `k3s`/`k3s-agent` service for these
+changes to take effect. Follow the installed K3s version's
+[private registry instructions](https://docs.k3s.io/installation/private-registry);
+newer fallback-control flags are not available in all older releases. Other
+managed distributions need their own supported configuration mechanism.
+
+### 2.2 Namespace and pull credentials
+
+Create the namespace idempotently:
+
+```bash
+kubectl create namespace mm-bot-manager --dry-run=client -o yaml | kubectl apply -f -
+```
+
+**Private registry only:** create or rotate the pull Secret using an isolated
+Docker configuration and a Harbor account with pull access to both repositories.
+The password is read at a hidden prompt and passed only on stdin; it never becomes
+a process argument. The temporary credential file is mode 0600 inside a private
+directory and is removed on exit. Do not enable shell tracing (`set -x`). Complete
+section 2.1 first; changing `--config` does not configure daemon transport.
+
+```bash
+(
+  set -euo pipefail
+  umask 077
+  registry="harbor.internal.example" # exact authority; HTTP example: harbor.internal.example:8080
+  auth_dir="$(mktemp -d)"
+  trap 'rm -rf "$auth_dir"' EXIT
+  read -r -p 'Harbor username: ' registry_user
+  read -r -s -p 'Harbor password: ' registry_password
+  printf '\n'
+  printf '%s' "$registry_password" | docker --config "$auth_dir" login "$registry" \
+    --username "$registry_user" --password-stdin
+  unset registry_password
+  kubectl -n mm-bot-manager create secret generic harbor-pull \
+    --type=kubernetes.io/dockerconfigjson \
+    --from-file=".dockerconfigjson=$auth_dir/config.json" \
+    --dry-run=client -o yaml | kubectl -n mm-bot-manager apply -f -
+)
+```
+
+Repeat this block for rotation; update in place rather than deleting the Secret.
+For unauthenticated public repositories, keep `imagePullSecrets: []` and omit
+the pull Secret. Transport configuration is still required for HTTP/private CA.
+
+### 2.3 Publish or transfer the exact images
+
+Build on a connected staging machine for the **cluster architecture**, not
+implicitly for the build laptop. For AMD64 nodes, use a publisher account with
+push access to the destination projects in the isolated session below. For a mixed
+cluster, use the multi-platform replacement immediately after this example.
+
+```bash
+(
+  set -euo pipefail
+  umask 077
+  registry="harbor.internal.example" # exact authority; HTTP example: harbor.internal.example:8080
+  auth_dir="$(mktemp -d)"
+  trap 'rm -rf "$auth_dir"' EXIT
+  export BUILDX_CONFIG="${BUILDX_CONFIG:-${DOCKER_CONFIG:-$HOME/.docker}/buildx}"
+  export DOCKER_CONFIG="$auth_dir"
+  read -r -p 'Harbor publisher username: ' registry_user
+  read -r -s -p 'Harbor publisher password: ' registry_password
+  printf '\n'
+  printf '%s' "$registry_password" | docker login "$registry" \
+    --username "$registry_user" --password-stdin
+  unset registry_password
+  image_tag="$(git rev-parse --short=12 HEAD)"
+  docker build --platform linux/amd64 -t "$registry/platform/mm-bot-manager:$image_tag" .
+  docker push "$registry/platform/mm-bot-manager:$image_tag"
+  docker pull --platform linux/amd64 postgres:15.18-alpine3.24
+  docker tag postgres:15.18-alpine3.24 "$registry/library/postgres:15.18-alpine3.24"
+  docker push "$registry/library/postgres:15.18-alpine3.24"
+  docker image inspect "$registry/platform/mm-bot-manager:$image_tag" --format '{{json .RepoDigests}}'
+  docker image inspect "$registry/library/postgres:15.18-alpine3.24" --format '{{json .RepoDigests}}'
+)
+```
+
+The pull Secret session above deliberately does not retain workstation credentials.
+This publisher session authenticates separately and removes its credentials on
+exit too; it does not put push credentials in Kubernetes. With an isolated
+`DOCKER_CONFIG`, Buildx would otherwise lose the configured builder's location;
+the `BUILDX_CONFIG` assignment preserves that location while isolating Docker auth.
+The isolated login/publishing examples assume the default local Docker context.
+For a remote/custom context, have the operator supply an approved isolated Docker
+configuration/endpoint with the required context metadata and TLS settings;
+do not accidentally publish through a different daemon or copy cached credentials.
+
+For a mixed cluster, replace the application's `docker build` and `docker push`
+lines **inside that session** with the following. The configured builder must
+support both platforms; verify its platform list before building:
+
+```bash
+docker buildx build --builder mm-bot-harbor --platform linux/amd64,linux/arm64 \
+  --tag "$registry/platform/mm-bot-manager:$image_tag" \
+  --metadata-file .local/kubernetes/images/application-build.json --push .
+```
+
+Also omit the application's `docker image inspect` line for this route: the
+`docker-container` builder pushes directly and does not load the result into the
+local Docker image store. After a successful build/push, take `containerimage.digest`
+from the [Buildx metadata file](https://docs.docker.com/reference/cli/docker/buildx/build/#metadata-file)
+and verify that published reference through Kubernetes in section 2.4.
 
 Put these actual repositories and tags, preferably their published `sha256`
 digests, into the site overlay. A digest takes precedence over a tag. The above
@@ -202,53 +466,105 @@ preparing that directory with `init`, verify and load:
 )
 ```
 
-Then tag and **push into the destination registry**, and verify its published digests.
+Then configure transport and authenticate on the destination publishing workstation
+as above, tag and **push into the destination registry**, and verify its published digests.
 A loaded image on the operator's laptop is not present on Kubernetes nodes;
 `RepoDigests` may be empty until the image is published. Transfer the source/chart,
 Helm/kubectl binaries and any local validation schemas as well.
 
-For a private Harbor CA, configure trust in the container runtime on **every
-node**, and on the build/mirroring workstation. `imagePullSecrets` authenticate
-pulls and do not install registry CA trust. Runtime refreshes are platform-specific
-maintenance operations.
+### 2.4 Verify pulls through Kubernetes on each eligible node
 
-Create the namespace idempotently:
+After publishing and configuring pull access, test **before installing/upgrading**.
+A successful workstation `docker login`/`pull`, `ctr --plain-http` or Helm dry run
+does not prove the kubelet's CRI transport and Secret work. Run the following
+**once per image on each Ready node** where application, PostgreSQL or maintenance
+Pods may run, including eligible control-plane nodes. Choose a real node name from
+section 1 and an exact published image reference from the site overlay (prefer
+immutable digests). Check the application image, then repeat with
+`harbor.internal.example[:port]/library/postgres@sha256:ACTUAL_DIGEST` for internal
+database mode. External-database mode only needs the application image.
 
-```bash
-kubectl create namespace mm-bot-manager --dry-run=client -o yaml | kubectl apply -f -
-```
-
-**Private registry only:** create or rotate the pull Secret using an isolated
-Docker configuration. The password is read at a hidden prompt and passed only on
-stdin; it never becomes a
-process argument. The temporary credential file is mode 0600 inside a private
-directory and is removed on exit. Do not enable shell tracing (`set -x`).
+The temporary Pod runs `/bin/sh -c 'exit 0'` from the selected image. It
+starts neither the application nor PostgreSQL, mounts no PVC or application/DB
+Secret, and disables the service-account token. `nodeName` targets the chosen
+node directly; this checks runtime access, not scheduler placement. Adapt the
+resource requests or scheduling constraints to site admission policies if needed.
 
 ```bash
 (
   set -euo pipefail
-  umask 077
-  registry="harbor.internal.example" # replace with the actual registry
-  auth_dir="$(mktemp -d)"
-  trap 'rm -rf "$auth_dir"' EXIT
-  read -r -p 'Harbor username: ' registry_user
-  read -r -s -p 'Harbor password: ' registry_password
-  printf '\n'
-  printf '%s' "$registry_password" | docker --config "$auth_dir" login "$registry" \
-    --username "$registry_user" --password-stdin
-  unset registry_password
-  kubectl -n mm-bot-manager create secret generic harbor-pull \
-    --type=kubernetes.io/dockerconfigjson \
-    --from-file=".dockerconfigjson=$auth_dir/config.json" \
-    --dry-run=client -o yaml | kubectl -n mm-bot-manager apply -f -
+  node="CHANGE_ME_NODE_NAME"
+  image="CHANGE_ME_REGISTRY/platform/mm-bot-manager@sha256:CHANGE_ME_DIGEST"
+  case "$node $image" in
+    *CHANGE_ME*) printf '%s\n' 'Replace node and image placeholders first.' >&2; exit 2 ;;
+  esac
+  pod="$(kubectl -n mm-bot-manager create -f - -o jsonpath='{.metadata.name}' <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: mm-bot-registry-check-
+spec:
+  nodeName: "$node"
+  restartPolicy: Never
+  activeDeadlineSeconds: 300
+  automountServiceAccountToken: false
+  imagePullSecrets:
+    - name: harbor-pull
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: image-check
+      image: "$image"
+      imagePullPolicy: Always
+      command: ["/bin/sh", "-c", "exit 0"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {cpu: 100m, memory: 64Mi}
+EOF
+  )"
+  printf 'Registry check Pod: %s on %s for %s\n' "$pod" "$node" "$image"
+  phase=""
+  for ((attempt=0; attempt<66; attempt++)); do
+    phase="$(kubectl -n mm-bot-manager get "pod/$pod" -o jsonpath='{.status.phase}')"
+    case "$phase" in Succeeded|Failed) break ;; esac
+    sleep 5
+  done
+  if [[ "$phase" != Succeeded ]]; then
+    kubectl -n mm-bot-manager describe "pod/$pod"
+    printf 'Check failed; retain Pod %s for diagnosis, then delete it explicitly.\n' "$pod" >&2
+    exit 1
+  fi
+  kubectl -n mm-bot-manager get "pod/$pod" \
+    -o jsonpath='{range .status.containerStatuses[*]}{.name}{"\t"}{.imageID}{"\t"}{.state.terminated.exitCode}{"\n"}{end}'
+  kubectl -n mm-bot-manager describe "pod/$pod"
+  kubectl -n mm-bot-manager delete "pod/$pod" --wait=true
 )
 ```
 
-Repeat this block for rotation; update in place rather than deleting the Secret.
-A restart with `IfNotPresent` can reuse cached images and does not prove new
-registry credentials work. Validate rotation with a planned upgrade to a new
-immutable digest that requires a pull; test PostgreSQL repository permissions
-separately during an approved maintenance window.
+For public images remove `imagePullSecrets`; for another private Secret use its
+actual name. After a failure, record the generated name, inspect its events, then
+delete only that Pod with `kubectl -n mm-bot-manager delete pod/ACTUAL_CHECK_POD`.
+Acceptance is `Succeeded`, exit code 0 for each selected image, expected image IDs
+and successful image-pull events on **each tested node**. Record node, runtime,
+image references/IDs and outcome without credential data. An index digest can
+resolve to a different platform-specific digest in the reported image ID.
+
+`Always` requires a registry resolution/pull attempt but can reuse cached layers.
+It proves the current configured pull path; it does not prove all layers crossed
+the network, or that the named Secret was the only credential source. To prove a
+full download or credential rotation without cache/alternate credentials, use an
+isolated test node with no relevant cached image/layers or node-level registry
+credentials and a newly published immutable image. Test both repositories. Do not
+clear a running node's image cache or restart application/DB Pods just for this
+check. Untested nodes or repositories remain **NOT_TESTED**.
 
 ## 3. Application/database Secrets and Mattermost CA
 
@@ -457,10 +773,47 @@ kubectl -n mm-bot-manager rollout status deployment/mm-bot-manager --timeout=10m
 
 For `Pending`/`CrashLoopBackOff`, inspect `kubectl describe pod`, namespace events
 and application/PostgreSQL logs. Check PVC provisioning/capacity, image architecture,
-registry CA/authentication, Secret **key names**, database password consistency,
+registry transport/CA/authentication, Secret **key names**, database password consistency,
 Mattermost account/PAT permissions, DNS, HTTPS and WSS. Do not print Secret data or
 paste connection strings into reports. Custom release/fullname overrides require
 substituting the actual Deployment name in the restart commands.
+
+For `ErrImagePull`/`ImagePullBackOff`, find the affected node with
+`kubectl -n mm-bot-manager get pods -o wide`, inspect that Pod's events and use this table:
+
+| Symptom | Check / correction |
+| --- | --- |
+| `server gave HTTP response to HTTPS client` | The client is trying HTTPS against HTTP. Match the exact registry authority/port and configure HTTP on the daemon, selected builder or affected node as in section 2.1. |
+| `x509: certificate signed by unknown authority` | HTTPS is in use. Install the CA chain in the failing client/runtime; a Pod's Mattermost CA bundle does not configure image pulls. |
+| Certificate hostname mismatch / expired certificate | Fix the endpoint name/certificate or clock; keep HTTPS verification enabled. |
+| `401` / `403` / `pull access denied` | Check the Harbor account, project/repository pull rights, Secret name/namespace and registry authority (including port). A working application repository does not prove PostgreSQL repository access. |
+| `FailedToRetrieveImagePullSecret` | Verify that the referenced Secret exists in this Pod's namespace and is a valid `kubernetes.io/dockerconfigjson` Secret; do not print its contents. |
+| `manifest unknown` / `not found` | Confirm the image was pushed into this destination registry with the requested repository/tag/digest. |
+| `no matching manifest` / `exec format error` | Verify the node architecture and the published platform manifest. |
+| DNS failure / timeout / refused connection | Check the node's DNS, route, registry listener/port and daemon proxy/`NO_PROXY` configuration. A workstation or Pod-network check does not prove node-runtime access. |
+| Docker works, Kubernetes fails | Verify the kubelet runtime from section 1, its active configuration and the Pod's pull Secret; Docker/`ctr` transport flags do not configure the CRI plugin. |
+
+For a transport-only probe from the relevant workstation/node, use the selected
+endpoint without credentials (replace the URL):
+
+```bash
+curl --silent --show-error --connect-timeout 5 --max-time 15 \
+  --dump-header - --output /dev/null http://harbor.internal.example:8080/v2/
+# HTTPS with a private CA instead:
+curl --silent --show-error --connect-timeout 5 --max-time 15 \
+  --cacert /protected/config/harbor-ca.crt \
+  --dump-header - --output /dev/null https://harbor.internal.example/v2/
+```
+
+HTTP `200` or an expected `401` with `WWW-Authenticate` establishes registry API
+reachability, **not authenticated image-pull success**. Check that any advertised
+token-service URL has the correct scheme/host/port and is reachable/trusted too;
+HTML or an unexpected redirect can indicate a proxy/Harbor external-URL problem.
+Do not use `curl -k` or disable TLS verification to repair an HTTPS deployment.
+For K3s, also inspect the affected node's
+`/var/lib/rancher/k3s/agent/containerd/containerd.log`: an endpoint fallback can
+hide the first failure in the Pod event. After correction, repeat section 2.4;
+do not use application/DB restarts as a registry test.
 
 ## 6. Internal PostgreSQL backup, inspection and full verification
 

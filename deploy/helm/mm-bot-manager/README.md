@@ -129,6 +129,13 @@ production internal profile, `examples/values-internal-local-path.yaml` only for
 a single-node/test cluster, and `examples/values-harbor.yaml` after mirroring
 both images to Harbor.
 
+Harbor may use HTTP or HTTPS. Keep image repositories as `host[:port]/project/image`
+without a URL scheme. Configure the selected transport and any private CA on the
+publishing daemon/BuildKit builder and every eligible Kubernetes node;
+`imagePullSecrets` only provide authentication. In a source checkout, follow
+`docs/kubernetes.md` sections 2.1–2.4 for Docker, BuildKit, containerd/K3s examples
+and per-node pull verification before installation or credential rotation.
+
 ## Installation and acceptance
 
 Do not install an example profile without a site overlay. For a source checkout,
