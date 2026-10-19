@@ -1,4 +1,5 @@
 .git
+.local/kubernetes/
 .github
 .idea
 .claude
@@ -23,3 +24,12 @@ htmlcov
 deploy/helm/**/examples/*.env
 values-site.yaml
 harbor-auth
+images.tar
+images.tar.sha256
+mm-bot-manager-*.dump
+*-secret.env.bak
+*-secret.env~
+deployment.env.bak
+deployment.env~
+values-site.yaml.bak
+values-site.yaml~

@@ -3,7 +3,7 @@
 Deploy `mm-bot-manager` with Helm 3 or 4 on Kubernetes `>= 1.21.1`, using either an
 external PostgreSQL service or one internal PostgreSQL StatefulSet. The chart has
 no Helm dependencies. All commands below run in **Bash from the repository root**.
-The helper scripts require Bash, Helm and kubectl; no Python installation is
+The helper scripts require Bash, Git, Helm and kubectl; no Python installation is
 needed on the operator's workstation.
 
 The internal database has **one replica and no HA failover**. Data and logical
@@ -14,13 +14,13 @@ Port 8080 is a health interface bound to the Pod network, not a public endpoint.
 Follow this route for a **first installation**:
 
 1. [Choose and save the configuration](#1-prerequisites-and-site-configuration)
-   in `deployment.env`, then fill `values-site.yaml`.
+   in `.local/kubernetes/deployment.env`, then fill the adjacent `values-site.yaml`.
 2. [Publish images and prepare registry access](#2-prepare-images-and-registry-authentication).
 3. [Create the application and selected database Secrets](#3-applicationdatabase-secrets-and-mattermost-ca).
 4. [Check and install the saved configuration](#4-validate-and-install-the-exact-configuration).
 5. [Complete acceptance](#5-acceptance-and-diagnosis), including a real backup verification.
 
-For an **existing installation**, keep the saved files, take a verified backup and
+For an **existing installation**, keep the saved files in place, take a verified backup and
 follow [section 8](#8-upgrade-rollback-retained-storage-and-disaster-recovery).
 Do not repeat initial setup or recreate Secrets for an ordinary image upgrade.
 The `init` and `prepare-secret` helpers preserve existing files, including their
@@ -71,7 +71,7 @@ installation configuration.
 ./scripts/kubernetes-deploy.sh init
 ```
 
-Edit `deployment.env` **once**: select `profile` from the table above and set
+Edit `.local/kubernetes/deployment.env` **once**: select `profile` from the table above and set
 `context` to the exact output of `kubectl config current-context`. There is no
 usable default profile: an unedited selection stops check/apply. For example,
 the single-node/test choice in that file is (edit the file, not the terminal):
@@ -80,24 +80,78 @@ the single-node/test choice in that file is (edit the file, not the terminal):
 profile="$chart/examples/values-internal-local-path.yaml"
 ```
 
+All new persistent operator files go into **`.local/kubernetes/`**:
+
+```text
+.local/kubernetes/
+  deployment.env
+  values-site.yaml
+  app-secret.env
+  internal-db-secret.env OR external-db-secret.env
+  images/images.tar
+  images/images.tar.sha256
+  backups/                         # dumps exported from the cluster
+```
+
+`init` creates the local directory plus `images/` and `backups/` with private
+permissions, and creates missing configuration files with mode 0600. Secret
+files are prepared separately in section 3. The entire directory, including
+editor backups, is excluded from Git, Docker build contexts and Helm packaging.
+Templates under `deploy/helm/mm-bot-manager/examples/` remain tracked and packaged.
+Preserve the local configuration in approved storage: it is not part of a Git
+clone or image. Transfer required image archives explicitly to a closed contour.
+
 Keep `chart` and `site` as generated unless you deliberately use other paths.
-`deployment.env` is a local Bash file: only load your own reviewed configuration.
-It contains paths and the kube-context, never credentials. It is ignored by Git
-and excluded from Docker/chart packaging. Preserve it together with the site
-overlay in approved configuration storage. Re-running `init` uses the saved
-`site` path and never resets the selected profile or overwrites the overlay.
+The saved configuration is an operator-owned Bash file, never a downloaded or
+untrusted env file. Paths are resolved from the repository root, even when the
+configuration itself is elsewhere. The helpers check paths **before reading or
+creating local files**: a path inside a Git checkout must be ignored and absent
+from its index. An ignored file that was previously added (including `git add -f`)
+is rejected. The same checks apply to another Git checkout containing an external
+path. Symlink paths are rejected; dot segments cannot bypass the checks. A path
+outside all Git checkouts is allowed. For a custom path inside the build context,
+also add its exclusion to `.dockerignore`, and to `.helmignore` if it is under
+the chart. Keeping files in the standard local directory avoids those extra rules.
+
+Git is required for these checks. Transferred source archives without `.git` use
+a disposable Git directory to evaluate the supplied ignore rules; the helper does
+not initialize or modify Git metadata in the transferred sources.
+
+**Compatibility with existing installations — no automatic migration:**
+
+- If only the old root `deployment.env` exists, it remains active. Its `site`
+  setting and existing files are used in place, without copying, moving or chmod.
+- Existing root Secret env files are reused. `prepare-secret` prints the selected
+  path; `secret-path` returns that same path for Secret creation/rotation.
+- If both configuration files exist, stop and explicitly select one for **every**
+  command. Two copies of the same Secret also require an explicit layout selection.
+
+```bash
+./scripts/kubernetes-deploy.sh --config deployment.env check
+# Or select the new layout explicitly:
+./scripts/kubernetes-deploy.sh --config .local/kubernetes/deployment.env check
+```
+
+Use the same `--config FILE` on `init`, `prepare-secret`, `secret-path` and `apply`
+when selecting explicitly. Nothing is deleted or moved to resolve duplicates.
+Legacy root working files, known image archive/checksum names, dump names and
+`.bak`/`~` copies remain excluded too. Keep new exports in the local directory.
+If the helper reports a tracked file, preserve its local copy and review removal
+from Git's index separately; the helper never untracks files automatically.
 
 **Required for every profile — fill the site overlay:**
 
-Edit `values-site.yaml` and replace **every `CHANGE_ME`**: application repository and
+Edit the selected site overlay (new default `.local/kubernetes/values-site.yaml`)
+and replace **every `CHANGE_ME`**: application repository and
 immutable tag/digest, PostgreSQL repository, real `mattermost.url`, approver and
 catalog viewer usernames. Set `defaultLanguage` to `ru` or `en`; users can later
 select `!language ru|en|auto` and `!catalog --format cards|table`. Keep
 `verifySSL: true`. Set `imagePullSecrets` to your registry Secret, or `[]` only for
 images that all nodes can pull without authentication. For external mode the
 internal image settings are unused. No token, password or `DB_URL` belongs in
-values. The root `values-site.yaml` is ignored by Git and excluded from Docker
-builds; preserve it in approved configuration storage for future upgrades.
+values. The default site overlay and legacy root `values-site.yaml` are ignored by Git
+and excluded from Docker builds; preserve the selected file in approved
+configuration storage for future upgrades.
 
 ## 2. Prepare images and registry authentication
 
@@ -123,11 +177,32 @@ digests, into the site overlay. A digest takes precedence over a tag. The above
 single-platform PostgreSQL mirror is only suitable for nodes of that architecture.
 For a mixed cluster mirror its manifest list with the approved registry tool.
 
-In a closed contour, transfer image archives and checksums through the approved
-channel. Run `docker save --output images.tar IMAGE1 IMAGE2` in staging and
-`sha256sum images.tar >images.tar.sha256`. On the destination run
-`sha256sum --check images.tar.sha256`, then `docker load --input images.tar`, tag
-and **push into the destination registry**, and verify its published digests.
+**Closed contour only:** transfer image archives and checksums through the
+approved channel. From the staging source root, after `init`:
+
+```bash
+(
+  set -euo pipefail
+  umask 077
+  docker save --output .local/kubernetes/images/images.tar IMAGE1 IMAGE2
+  cd .local/kubernetes/images
+  sha256sum images.tar >images.tar.sha256
+)
+```
+
+Transfer both files to `.local/kubernetes/images/` on the destination. After
+preparing that directory with `init`, verify and load:
+
+```bash
+(
+  set -euo pipefail
+  cd .local/kubernetes/images
+  sha256sum --check images.tar.sha256
+  docker load --input images.tar
+)
+```
+
+Then tag and **push into the destination registry**, and verify its published digests.
 A loaded image on the operator's laptop is not present on Kubernetes nodes;
 `RepoDigests` may be empty until the image is published. Transfer the source/chart,
 Helm/kubectl binaries and any local validation schemas as well.
@@ -188,14 +263,16 @@ entering secrets. The Secret creation pipelines below do not print values.
 ./scripts/kubernetes-deploy.sh prepare-secret app
 ```
 
-Edit `MM_TOKEN` and `MM_BOT_TOKEN` in `app-secret.env`. **After saving real values**,
+Edit `MM_TOKEN` and `MM_BOT_TOKEN` in the path printed by the helper
+(new default `.local/kubernetes/app-secret.env`). **After saving real values**,
 apply the Secret in a separate step:
 
 ```bash
 (
   set -euo pipefail
+  secret_file="$(./scripts/kubernetes-deploy.sh secret-path app)"
   kubectl -n mm-bot-manager create secret generic mm-bot-manager-app \
-    --from-env-file=app-secret.env --dry-run=client -o yaml | kubectl apply -f -
+    --from-env-file="$secret_file" --dry-run=client -o yaml | kubectl apply -f -
 )
 ```
 
@@ -210,13 +287,15 @@ application, with the internal Service as `DB_HOST`; it does not construct a URL
 ```
 
 Edit the password and, if necessary, the dedicated username/database name in
-`internal-db-secret.env`. **After saving real values**, apply:
+the printed path (new default `.local/kubernetes/internal-db-secret.env`).
+**After saving real values**, apply:
 
 ```bash
 (
   set -euo pipefail
+  secret_file="$(./scripts/kubernetes-deploy.sh secret-path internal-db)"
   kubectl -n mm-bot-manager create secret generic mm-bot-manager-postgresql \
-    --from-env-file=internal-db-secret.env --dry-run=client -o yaml | kubectl apply -f -
+    --from-env-file="$secret_file" --dry-run=client -o yaml | kubectl apply -f -
 )
 ```
 
@@ -227,13 +306,15 @@ TLS-appropriate `DB_URL`.
 ./scripts/kubernetes-deploy.sh prepare-secret external-db
 ```
 
-Edit `DB_URL` in `external-db-secret.env`. **After saving the real value**, apply:
+Edit `DB_URL` in the printed path (new default
+`.local/kubernetes/external-db-secret.env`). **After saving the real value**, apply:
 
 ```bash
 (
   set -euo pipefail
+  secret_file="$(./scripts/kubernetes-deploy.sh secret-path external-db)"
   kubectl -n mm-bot-manager create secret generic mm-bot-manager-external-db \
-    --from-env-file=external-db-secret.env --dry-run=client -o yaml | kubectl apply -f -
+    --from-env-file="$secret_file" --dry-run=client -o yaml | kubectl apply -f -
 )
 ```
 
@@ -271,7 +352,8 @@ private key. Publicly trusted Mattermost needs no additional bundle.
 
 ## 4. Validate and install the exact configuration
 
-**Every installation and upgrade:** use the saved `deployment.env`. Do not set
+**Every installation and upgrade:** use the selected saved configuration
+(new default `.local/kubernetes/deployment.env`, legacy root file supported). Do not set
 `profile` again here. The commands work in a new terminal because the helper
 reloads the saved file on every invocation, discarding any inherited shell values.
 
@@ -362,6 +444,7 @@ Acceptance requires all of the following:
    `!catalog` retain those preferences. Switch back to your desired language/format.
 4. In internal mode run an on-demand backup, inspect its archive and run **verify**
    from section 6. Record the dump filename and successful isolated restore result.
+   Save any dumps exported to this workstation under `.local/kubernetes/backups/`.
    Export backups off-cluster and rehearse the complete restore procedure in a test
    release before relying on it for production recovery.
 
@@ -487,7 +570,7 @@ kubectl -n mm-bot-manager patch cronjob mm-bot-manager-backup \
 
 ## 8. Upgrade, rollback, retained storage and disaster recovery
 
-For an ordinary upgrade, keep `deployment.env` and edit the immutable application
+For an ordinary upgrade, keep the selected `deployment.env` in place and edit the immutable application
 image tag/digest in the existing site overlay. Do not rerun initial file copying
 or Secret creation. Check the application/PostgreSQL image changes and take a
 verified backup first, then use the same commands as the initial installation:
@@ -534,7 +617,9 @@ Jobs and simulate API failures, terminating Pods, locks and previous suspend/rep
 states. Deployment workflow tests run the documented commands with real Helm
 rendering and a fake cluster. They check all four saved profiles, reuse in a new
 shell, site overrides, non-overwriting preparation, context mismatch and stopping
-before installation after validation/render/dry-run failures.
+before installation after validation/render/dry-run failures. They also exercise
+legacy files, duplicate selections, ignored/untracked paths, source archives and
+Git staging/Helm packaging exclusions for generated artifacts.
 PVC-check tests execute its rendered shell script against disposable local
 files, checking success, storage failures, temporary-file cleanup and archive
 preservation; render tests cover revisions and Harbor settings. These do not

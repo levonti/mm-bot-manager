@@ -133,9 +133,17 @@ both images to Harbor.
 
 Do not install an example profile without a site overlay. For a source checkout,
 follow `docs/kubernetes.md`: run `./scripts/kubernetes-deploy.sh init`, then edit
-`deployment.env` once to choose the profile and kube-context, and fill the site
+`.local/kubernetes/deployment.env` once to choose the profile and kube-context, and fill the site
 overlay. `init` preserves existing files. Prepare images, namespace and Secrets
 before checking the installation.
+
+New configuration, Secret working copies and image/backup exports use
+`.local/kubernetes/`, excluded from Git, Docker contexts and Helm packages.
+Existing root configuration and Secret files continue to work in place. If both
+layouts contain a configuration, select one explicitly with `--config FILE` on
+every helper command. `secret-path KIND` resolves the selected Secret working file.
+Custom paths inside a Git checkout must be ignored and untracked. See the runbook
+for duplicate handling and custom build-context exclusions. Git is required.
 
 ```bash
 ./scripts/kubernetes-deploy.sh check
@@ -153,7 +161,7 @@ server-side dry run, stopping on any failure before installation. It uses the
 Helm-version-appropriate rollback flag and waits for Jobs. For an upgrade, edit
 the existing overlay, take a verified backup, then repeat these two commands.
 The helper belongs to the source checkout; a standalone packaged chart does not
-include repository scripts or the operator's local `deployment.env`.
+include repository scripts or the operator's local configuration.
 
 With internal backups enabled, an ordinary `backup-pvc-check-<revision>` Job
 mounts the backup PVC immediately. This supplies the first consumer required by

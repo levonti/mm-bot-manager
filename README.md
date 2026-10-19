@@ -13,7 +13,7 @@ bots they created through this manager.
 - A Mattermost server and an admin who can create the manager bot account
 
 For Kubernetes, follow the [deployment runbook](docs/kubernetes.md). Save the
-profile and kube-context once in `deployment.env`; `scripts/kubernetes-deploy.sh`
+profile and kube-context once in `.local/kubernetes/deployment.env`; `scripts/kubernetes-deploy.sh`
 uses that selection for checks and installation. Installation
 requires an edited site overlay in addition to the database/storage profile.
 Internal PostgreSQL maintenance uses `scripts/kubernetes-db.sh`, with full archive
