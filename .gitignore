@@ -35,6 +35,7 @@ report.xml
 .env
 
 # Kubernetes Secret working copies
+/.local/kubernetes/
 /app-secret.env
 /external-db-secret.env
 /internal-db-secret.env
@@ -42,6 +43,16 @@ report.xml
 /deployment.env
 /harbor-auth/
 deploy/helm/**/examples/*.env
+# Legacy working copies and exports; kept in place during upgrades.
+/images.tar
+/images.tar.sha256
+/mm-bot-manager-*.dump
+/*-secret.env.bak
+/*-secret.env~
+/deployment.env.bak
+/deployment.env~
+/values-site.yaml.bak
+/values-site.yaml~
 
 # Runtime data (SQLite volume mounted here locally)
 data/
