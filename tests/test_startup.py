@@ -186,3 +186,52 @@ async def test_catalog_readers_resolve_to_ids_and_receive_catalog_through_dispat
         assert "https://git.example/team/repo" in message
     finally:
         conn.close()
+
+
+@respx.mock
+async def test_startup_automatically_upgrades_previous_release_before_events(tmp_path, monkeypatch):
+    from mm_bot_manager.repository import PendingRequestRepo
+    from tests.test_imports import BOT
+    from tests.test_updates import install_previous_schema, seed_previous_version
+
+    cfg = settings(tmp_path, mm_display_timezone="Europe/Moscow")
+    cfg.health_port = 0
+    conn = connect(cfg.db_path)
+    install_previous_schema(conn)
+    seed_previous_version(conn)
+    respx.get("https://mm.example/api/v4/users/me").mock(
+        return_value=httpx.Response(200, json={"id": "mgr", "username": "manager"})
+    )
+    post = respx.post("https://mm.example/api/v4/posts").mock(
+        return_value=httpx.Response(201, json={"id": "reply"})
+    )
+    conn.execute("UPDATE bot SET created_at = '2026-10-22T11:35:08+00:00'")
+
+    async def stream(*args, **kwargs):
+        assert conn.execute("SELECT version FROM schema_migration").fetchone()[0] == 1
+        assert BotRepo(conn).get(BOT).revision == 0
+        assert PendingRequestRepo(conn).get("old-pending").status == "pending"
+        assert TokenRepo(conn).get("keep-token").revoked_at is None
+        yield {
+            "event": "posted",
+            "data": {
+                "channel_type": "D",
+                "sender_name": "@alice",
+                "post": json.dumps(
+                    {
+                        "id": "info-1",
+                        "user_id": "a" * 26,
+                        "channel_id": "dm",
+                        "message": "!info legacy",
+                    }
+                ),
+            },
+        }
+
+    monkeypatch.setattr(app, "stream_events", stream)
+    try:
+        await app.serve(cfg, conn)
+        body = json.loads(post.calls.last.request.content)["message"]
+        assert "22.10.2026 14:35:08 (UTC+03:00)" in body
+    finally:
+        conn.close()

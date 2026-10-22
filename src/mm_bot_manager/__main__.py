@@ -82,6 +82,7 @@ async def serve(settings: Settings, conn: DbConn) -> None:
             approver_ids=approver_ids,
             catalog_viewer_ids=catalog_ids,
             default_language=settings.mm_default_language,
+            display_timezone=settings.mm_display_timezone,
         )
         recovery_ctx = factory.build(
             caller_user_id=manager_user_id, caller_username=manager_username, channel_id=""

@@ -61,6 +61,8 @@ def seed(ctx, number=0, *, owner=ALICE, name=None, criticality=2, description=No
 
 def make_legacy(conn):
     """Downgrade inventory columns only, with realistic persisted dependent records."""
+    suffix = "" if conn.dialect == "sqlite" else " ON bot"
+    conn.execute(f"DROP TRIGGER IF EXISTS bot_revision{suffix}")
     for table in ("bot", "pending_bot_request"):
         for event in ("insert", "update"):
             suffix = "" if conn.dialect == "sqlite" else f" ON {table}"
@@ -239,16 +241,31 @@ async def test_catalog_bounds_and_escapes_free_text_and_never_contains_tokens(en
 async def test_metadata_update_is_local_authorised_and_audited(env):
     seed(env)
     reply = await dispatch(env, "!update demo-0 --criticality 1")
-    assert "Updated registry" in reply
+    assert "mandatory approval" in reply
+    assert env.bot_repo.get("bot-0").criticality == 2
+    request_id = env.bot_repo.conn.execute(
+        "SELECT request_id FROM pending_bot_request WHERE kind = 'update'"
+    ).fetchone()[0]
+    assert "Approved" in await dispatch(approver(env), f"!approve {request_id}")
     audit = dict(env.bot_repo.conn.execute("SELECT * FROM metadata_audit").fetchone())
     assert audit["old_criticality"] == 2 and audit["criticality"] == 1
-    assert audit["changed_by"] == ALICE and audit["source"] == "chat"
+    assert audit["changed_by"] == APPROVER and audit["source"] == f"approval:{request_id}"
     # An identical retry is a no-op, with no duplicate change event.
     await dispatch(env, "!update demo-0 --criticality 1")
     assert env.bot_repo.conn.execute("SELECT COUNT(*) FROM metadata_audit").fetchone()[0] == 1
+    other_reviewer = replace(
+        approver(env), caller_user_id=BOB, approver_ids=frozenset({APPROVER, BOB})
+    )
     await dispatch(approver(env), "!update demo-0 --repo git@git.example:group/project.git")
+    request_id = env.bot_repo.conn.execute(
+        "SELECT request_id FROM pending_bot_request WHERE kind = 'update' AND status = 'pending'"
+    ).fetchone()[0]
+    assert "Self-approval" in await dispatch(approver(env), f"!approve {request_id}")
+    assert "Approved" in await dispatch(other_reviewer, f"!approve {request_id}")
     assert env.bot_repo.get("bot-0").git_repository == "git@git.example:group/project.git"
-    assert "separately" in await dispatch(env, "!update demo-0 --criticality 3 --description hi")
+    assert "mandatory approval" in await dispatch(
+        env, "!update demo-0 --criticality 3 --description hi"
+    )
     assert "direct message" in await dispatch(
         replace(env, channel_type="O"), "!update demo-0 --criticality 3"
     )

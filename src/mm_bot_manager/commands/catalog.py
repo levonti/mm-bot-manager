@@ -1,5 +1,6 @@
 from ..i18n import plural
 from ..metadata import cell, validate_criticality
+from ..permissions import can_read_catalog
 from ..repository import CatalogRepo, PreferenceRepo
 from .context import CommandContext
 from .parser import ParsedArgs
@@ -8,7 +9,7 @@ from .parser import ParsedArgs
 async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     if ctx.channel_type != "D":
         return ctx.tr("catalog.dm")
-    if ctx.caller_user_id not in ctx.approver_ids | ctx.catalog_viewer_ids:
+    if not can_read_catalog(ctx):
         return ctx.tr("catalog.denied")
     if args.positional or args.flags.keys() - {"criticality", "owner", "search", "page", "format"}:
         return ctx.tr("catalog.usage")

@@ -569,3 +569,18 @@ def test_packaged_chart_excludes_filled_environment_working_copies(tmp_path: Pat
         names = archive.getnames()
     assert not any(x.endswith(".env") or x.endswith("/values-site.yaml") for x in names)
     assert any(x.endswith("values-site.yaml.example") for x in names)
+
+
+def test_display_timezone_reaches_application() -> None:
+    resources = render(
+        "values-external.yaml", "--set-string", "mattermost.displayTimezone=Europe/Moscow"
+    )
+    assert by_kind(resources, "ConfigMap")[0]["data"]["MM_DISPLAY_TIMEZONE"] == "Europe/Moscow"
+    deployment = by_kind(resources, "Deployment")[0]
+    env = {
+        item["name"]: item
+        for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    assert (
+        env["MM_DISPLAY_TIMEZONE"]["valueFrom"]["configMapKeyRef"]["key"] == "MM_DISPLAY_TIMEZONE"
+    )

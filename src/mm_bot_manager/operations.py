@@ -7,6 +7,7 @@ from .i18n import Message, UserFacingError
 from .logging import get_logger
 from .metadata import validate_metadata
 from .mm_client import MattermostError
+from .permissions import is_self_approval
 
 if TYPE_CHECKING:
     from .commands.context import CommandContext
@@ -113,6 +114,8 @@ async def create_managed_bot(
     criticality: int | None = None,
     request: PendingRequestRecord | None = None,
 ) -> str:
+    if request is not None and is_self_approval(ctx, request):
+        raise OperationError("approve.self_forbidden")
     metadata = validate_metadata(
         request.git_repository if request else git_repository,
         request.criticality if request else criticality,
@@ -260,4 +263,6 @@ async def recover_operations(ctx: CommandContext) -> int:
         # Never adopt or disable a bot merely because its username matches an intent.
         _uncertain(ctx, op.operation_id, op.request_id)
         unresolved += 1
-    return unresolved
+    from .updates import recover_updates
+
+    return unresolved + await recover_updates(ctx)

@@ -70,6 +70,11 @@ spec:
                 configMapKeyRef:
                   name: {{ include "mm-bot-manager.fullname" . }}
                   key: MM_DEFAULT_LANGUAGE
+            - name: MM_DISPLAY_TIMEZONE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mm-bot-manager.fullname" . }}
+                  key: MM_DISPLAY_TIMEZONE
             - name: MM_VERIFY_SSL
               valueFrom:
                 configMapKeyRef:

@@ -25,6 +25,7 @@ class CommandContext:
     language: str = "en"
     default_language: str = "en"
     language_resolver: LanguageResolver | None = None
+    display_timezone: str = "UTC"
 
     def tr(self, key: str, **params: Any) -> str:
         return tr(self.language, key, **params)

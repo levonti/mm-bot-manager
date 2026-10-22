@@ -1,3 +1,4 @@
+from ..dates import format_datetime
 from ..metadata import cell
 from .context import CommandContext
 from .parser import ParsedArgs
@@ -25,13 +26,16 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
         ("purpose", bot.description or "—"),
         ("repository", bot.git_repository or ctx.tr("metadata.missing")),
         ("criticality", critical),
-        ("registered", bot.created_at),
+        ("registered", format_datetime(bot.created_at, ctx.language, ctx.display_timezone)),
         ("source", ctx.tr("source.imported" if audit else "source.created")),
     ]
     if audit:
         values.extend(
             [
-                ("imported_at", audit["imported_at"]),
+                (
+                    "imported_at",
+                    format_datetime(audit["imported_at"], ctx.language, ctx.display_timezone),
+                ),
                 ("submitted_by", audit["submitted_by"]),
                 ("approved_by", audit["approved_by"]),
             ]

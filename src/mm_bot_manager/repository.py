@@ -23,6 +23,7 @@ class BotRecord:
     deleted_at: str | None
     git_repository: str | None = None
     criticality: int | None = None
+    revision: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +47,8 @@ def _bot_from_row(row: Any) -> BotRecord:
         deleted_at=row["deleted_at"],
         git_repository=row["git_repository"],
         criticality=row["criticality"],
+        # Read-only CLI previews can inspect the previous release before startup migration.
+        revision=dict(row).get("revision", 0),
     )
 
 

@@ -1,11 +1,14 @@
+from ..db import transaction
 from ..i18n import tr
 from ..localization import user_language
+from ..permissions import is_approver
+from ..updates import UpdateRepo
 from .context import CommandContext
 from .parser import ParsedArgs
 
 
 async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
-    if ctx.caller_user_id not in ctx.approver_ids:
+    if not is_approver(ctx):
         return ctx.tr("deny.you_are_not_authorised_to_deny_bot")
     if not args.positional:
         return ctx.tr("deny.usage_deny_request_id_reason")
@@ -21,12 +24,16 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
             "approve.request_is_already", v0=request_id, v1=ctx.tr(f"status.{req.status}")
         )
 
-    if not ctx.pending_repo.resolve(
-        request_id,
-        status="denied",
-        resolved_by=ctx.caller_user_id,
-        deny_reason=reason,
-    ):
+    with transaction(ctx.bot_repo.conn):
+        resolved = ctx.pending_repo.resolve(
+            request_id,
+            status="denied",
+            resolved_by=ctx.caller_user_id,
+            deny_reason=reason,
+        )
+        if resolved and req.kind == "update":
+            UpdateRepo(ctx.bot_repo.conn).finish(request_id)
+    if not resolved:
         return ctx.tr("deny.request_is_already_being_processed_or_resolved", v0=request_id)
 
     try:
