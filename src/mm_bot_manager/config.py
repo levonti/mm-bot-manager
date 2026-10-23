@@ -1,6 +1,7 @@
 from typing import Literal, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, HttpUrl, model_validator
+from pydantic import Field, HttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,14 +45,24 @@ class Settings(BaseSettings):
     health_port: int = Field(default=8080, ge=1, le=65535)
     log_level: str = Field(default="INFO")
     mm_verify_ssl: bool = Field(default=True)
-    # Approvers can review creation/import requests and read the global catalog.
-    # If empty, creation is immediate and imports are disabled.
+    # Approvers review creation/import/update requests and read the global catalog.
+    # If empty, creation is immediate; imports and key attribute updates are disabled.
     mm_approvers: str = Field(default="")
     mm_catalog_viewers: str = Field(default="")
     mm_default_language: Literal["en", "ru"] = "en"
+    mm_display_timezone: str = "UTC"
     max_workers: int = Field(default=4, ge=1, le=32)
     event_queue_size: int = Field(default=100, ge=1, le=10000)
     shutdown_timeout: float = Field(default=30, ge=1, le=300)
+
+    @field_validator("mm_display_timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ValueError, ZoneInfoNotFoundError:
+            raise ValueError("MM_DISPLAY_TIMEZONE must be a valid IANA timezone") from None
+        return value
 
     @property
     def approver_usernames(self) -> list[str]:

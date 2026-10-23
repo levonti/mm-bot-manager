@@ -18,7 +18,7 @@ RUN uv sync --frozen --no-dev --extra postgres
 FROM python:3.14-slim AS runtime
 
 # libpq is required by psycopg[binary] at runtime
-RUN apt-get update && apt-get install -y --no-install-recommends libpq5 \
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/app/.venv/bin:$PATH" \

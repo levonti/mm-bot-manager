@@ -2,6 +2,7 @@ import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 SCHEMA_SQL = """
@@ -97,6 +98,21 @@ CREATE TABLE IF NOT EXISTS metadata_audit (
     changed_by TEXT NOT NULL,
     source TEXT NOT NULL,
     changed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bot_update_request (
+    request_id TEXT PRIMARY KEY REFERENCES pending_bot_request(request_id),
+    bot_user_id TEXT NOT NULL REFERENCES bot(bot_user_id),
+    old_values TEXT NOT NULL,
+    new_values TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_update_active ON bot_update_request(bot_user_id)
+    WHERE active = 1;
+
+CREATE TABLE IF NOT EXISTS schema_migration (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
 );
 """
 
@@ -215,6 +231,71 @@ def init_schema(conn: DbConn) -> None:
                 if name not in names:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
             _require_metadata(conn, table)
+        _migrate_updates(conn)
+
+
+def _migrate_updates(conn: DbConn) -> None:
+    """Transactional, additive upgrade from the previous release on both databases."""
+    if conn.dialect == "sqlite":
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(bot)")}
+    else:
+        columns = {
+            r["column_name"]
+            for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'bot'"
+            )
+        }
+    if "revision" not in columns:
+        conn.execute("ALTER TABLE bot ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+    fields = (
+        "username",
+        "display_name",
+        "description",
+        "git_repository",
+        "criticality",
+        "owner_user_id",
+        "deleted_at",
+    )
+    if conn.dialect == "sqlite":
+        changed = " OR ".join(f"NEW.{f} IS NOT OLD.{f}" for f in fields)
+        conn.execute(
+            f"CREATE TRIGGER IF NOT EXISTS bot_revision AFTER UPDATE OF {', '.join(fields)} "
+            f"ON bot WHEN {changed} BEGIN UPDATE bot SET revision = OLD.revision + 1 "
+            "WHERE bot_user_id = NEW.bot_user_id; END"
+        )
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS immutable_bot_update BEFORE UPDATE OF "
+            "request_id, bot_user_id, old_values, new_values ON bot_update_request "
+            "BEGIN SELECT RAISE(ABORT, 'Update request payload is immutable'); END"
+        )
+    else:
+        changed = " OR ".join(f"NEW.{f} IS DISTINCT FROM OLD.{f}" for f in fields)
+        conn.execute(
+            "CREATE OR REPLACE FUNCTION advance_bot_revision() RETURNS trigger AS $$ "
+            f"BEGIN IF {changed} THEN NEW.revision = OLD.revision + 1; END IF; "
+            "RETURN NEW; END; $$ LANGUAGE plpgsql"
+        )
+        conn.execute("DROP TRIGGER IF EXISTS bot_revision ON bot")
+        conn.execute(
+            f"CREATE TRIGGER bot_revision BEFORE UPDATE OF {', '.join(fields)} ON bot "
+            "FOR EACH ROW EXECUTE FUNCTION advance_bot_revision()"
+        )
+        conn.execute(
+            "CREATE OR REPLACE FUNCTION immutable_bot_update() RETURNS trigger AS $$ "
+            "BEGIN RAISE EXCEPTION 'Update request payload is immutable'; END; $$ LANGUAGE plpgsql"
+        )
+        conn.execute("DROP TRIGGER IF EXISTS immutable_bot_update ON bot_update_request")
+        conn.execute(
+            "CREATE TRIGGER immutable_bot_update BEFORE UPDATE OF "
+            "request_id, bot_user_id, old_values, new_values ON bot_update_request "
+            "FOR EACH ROW EXECUTE FUNCTION immutable_bot_update()"
+        )
+    conn.execute(
+        "INSERT INTO schema_migration (version, applied_at) VALUES (1, ?) "
+        "ON CONFLICT (version) DO NOTHING",
+        (datetime.now(UTC).isoformat(timespec="seconds"),),
+    )
 
 
 def _require_metadata(conn: DbConn, table: str) -> None:

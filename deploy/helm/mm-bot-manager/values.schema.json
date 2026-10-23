@@ -53,6 +53,7 @@
         "approvers": { "type": "string" },
         "catalogViewers": { "type": "string" },
         "defaultLanguage": { "enum": ["en", "ru"] },
+        "displayTimezone": { "type": "string", "minLength": 1 },
         "verifySSL": { "type": "boolean" },
         "caBundle": {
           "type": "object",

@@ -15,6 +15,7 @@ mattermost:
   approvers: ""
   catalogViewers: ""
   defaultLanguage: en
+  displayTimezone: UTC
   verifySSL: true
   caBundle:
     existingConfigMap: ""

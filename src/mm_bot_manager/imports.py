@@ -12,6 +12,7 @@ from .db import transaction
 from .i18n import UserFacingError, tr
 from .localization import user_language
 from .metadata import validate_metadata
+from .permissions import is_self_approval
 from .repository import BotRecord, PendingRequestRecord, _now_iso
 
 if TYPE_CHECKING:
@@ -179,6 +180,8 @@ async def approve_import(ctx: CommandContext, request: PendingRequestRecord) -> 
         raise ImportError("imports.import_approval_is_only_accepted_in_a")
     if ctx.caller_user_id not in ctx.approver_ids:
         raise ImportError("imports.only_configured_approvers_may_approve_imports")
+    if is_self_approval(ctx, request):
+        raise ImportError("approve.self_forbidden")
     if request.kind != "import" or not request.target_bot_user_id:
         raise ImportError("imports.invalid_import_request_no_bot_will_be")
     metadata = validate_metadata(request.git_repository, request.criticality)

@@ -122,3 +122,52 @@ def test_recovery_cli_acknowledges_reviewed_missing_resource(db, monkeypatch):
 def test_recovery_cli_retry_empty_journal_needs_no_api_calls(db, monkeypatch):
     monkeypatch.setattr("sys.argv", ["recovery", "retry"])
     assert recovery.main() == 0
+
+
+@respx.mock
+async def test_operator_retry_resolves_configured_reviewers_for_update_recovery(db, monkeypatch):
+    from mm_bot_manager.updates import UpdateRepo
+    from tests.test_imports import ALICE, APPROVER, BOT, import_context
+    from tests.test_updates import UpdateMM, propose, seed_bot
+
+    cfg = recovery.load_settings()
+    cfg.mm_approvers = "approver"
+    ctx = import_context(db, UpdateMM())
+    seed_bot(ctx)
+    req = await propose(ctx, "--criticality 1")
+    assert ctx.pending_repo.claim(req.request_id, APPROVER)
+    respx.get("https://mm.example/api/v4/users/username/approver").mock(
+        return_value=httpx.Response(200, json={"id": APPROVER})
+    )
+    for user_id in (ALICE, APPROVER):
+        respx.get(f"https://mm.example/api/v4/users/{user_id}").mock(
+            return_value=httpx.Response(200, json={"id": user_id, "delete_at": 0, "is_bot": False})
+        )
+    assert await recovery.recover(db) == 0
+    assert ctx.pending_repo.get(req.request_id).status == "approved"
+    assert ctx.bot_repo.get(BOT).criticality == 1
+    assert UpdateRepo(db).active(BOT) is None
+
+
+async def test_operator_list_includes_sanitized_update_journal(db, monkeypatch, capsys):
+    from tests.test_imports import APPROVER, import_context
+    from tests.test_updates import REPO, UpdateMM, propose, seed_bot
+
+    ctx = import_context(db, UpdateMM())
+    seed_bot(ctx)
+    req = await propose(ctx)
+    assert ctx.pending_repo.claim(req.request_id, APPROVER)
+    monkeypatch.setattr("sys.argv", ["recovery", "list"])
+    assert recovery.main() == 0
+    output = capsys.readouterr().out
+    assert REPO not in output
+    assert json.loads(output)[0]["kind"] == "bot_update"
+    assert json.loads(output)[0]["request_id"] == req.request_id
+
+
+@respx.mock
+async def test_recovery_without_updates_does_not_depend_on_approver_resolution(db):
+    # A removed approver must not block cleanup of abandoned creations/tokens.
+    recovery.load_settings().mm_approvers = "deleted-user"
+    assert await recovery.recover(db) == 0
+    assert not respx.calls

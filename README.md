@@ -72,9 +72,10 @@ Create a `.env` file (or export variables directly) and fill it in:
 | `MM_URL`        | yes      | —                                 | Base URL of the MM server (`https://...`)                |
 | `MM_TOKEN`      | yes      | —                                 | system_admin PAT (bot management API)                    |
 | `MM_BOT_TOKEN`  | yes      | —                                 | Manager bot access token (WebSocket + posting)            |
-| `MM_APPROVERS`  | no       | empty                             | Comma-separated approver usernames; mandatory for imports |
+| `MM_APPROVERS`  | no       | empty                             | Comma-separated approver usernames; mandatory for imports and key attribute updates |
 | `MM_CATALOG_VIEWERS` | no | empty | Additional usernames with read-only global catalog access in DM |
 | `MM_DEFAULT_LANGUAGE` | no | `en` | Fallback interface language: `en` or `ru` |
+| `MM_DISPLAY_TIMEZONE` | no | `UTC` | IANA timezone for dates in `!info`, e.g. `Europe/Moscow`; invalid names stop startup |
 | `MM_VERIFY_SSL` | no       | `true`                            | Set `false` for self-signed certificates                 |
 | `DB_PATH`       | no       | `/data/mm-bot-manager.sqlite3`    | SQLite fallback (lowest database precedence)             |
 | `DB_URL`        | no       | —                                 | PostgreSQL DSN (highest database precedence)             |
@@ -102,18 +103,18 @@ Every command must start with `!`. New bot usernames passed to `!create` must en
 | Command                                                                                              | What it does                                                          |
 | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | `!language [ru\|en\|auto]` | Show or save your language preference in DM |
-| `!help`                                                                                              | Show the command cheatsheet                                           |
+| `!help`                                                                                              | Show commands available to your role; privileged help appears only in DM |
 | `!create <username> --repo <url> --criticality <1|2|3> [--display-name "..."] [--description "..."]`                                    | Create a bot; you become its owner (may require approver approval)    |
 | `!import <username> --repo <url> --criticality <1|2|3>`                                                                     | **DM only:** request an existing bot import; always requires approval |
 | `!list`                                                                                              | List bots you own                                                     |
 | `!info <username>`                                                                                   | Details on a bot you own                                              |
-| `!update <username> [--username "..."] [--display-name "..."] [--description "..."]`                 | Update attributes                                                     |
+| `!update <username> [--username "..."] [--display-name "..."] [--description "..."] [--repo <url>] [--criticality <1\|2\|3>]` | Key attributes require approval in DM; other attributes alone change immediately |
 | `!delete <username>`                                                                                 | Disable the bot in Mattermost and mark it deleted here                |
 | `!token create <username> [--description "..."]`                                                     | **DM only:** mint and deliver an access token in that DM               |
 | `!token list <username>`                                                                             | List active token IDs tracked by this manager                        |
 | `!token revoke <token_id>`                                                                           | Revoke a token you minted                                             |
-| `!approve <id>`                                                                                      | (Approvers only) Approve a pending creation or import request         |
-| `!deny <id> [reason]`                                                                                | (Approvers only) Deny a pending creation or import request            |
+| `!approve <id>` | (Approvers only) Approve creation, import or update; self-approval is forbidden |
+| `!deny <id> [reason]` | (Approvers only) Deny a pending request |
 
 ## Importing existing bots
 
@@ -204,11 +205,78 @@ and pages contain at most ten bots ordered by criticality, username and immutabl
 The catalog reflects local registrations; it does not poll remote account state.
 `!list` and `!info` include the new attributes for your own bots.
 
-Catalog readers receive no management or token privileges. Registry updates require
-an owner or approver in DM and are separate from remote `!update` fields. Every actual
-metadata change records old/new values, authenticated actor ID, time and source in
-`metadata_audit`; retries with identical values create no duplicate audit entries.
-An approver may update another owner's registry metadata without gaining remote-edit rights.
+Catalog readers receive no management or token privileges. Owners may propose changes to
+their bots; approvers may propose repository/criticality changes for other owners' bots.
+Only owners may propose remote username, display name or description changes.
+
+Changing `--repo`, `--criticality` or `--username` requires an explicit approval in DM,
+including when an approver proposes the change. A mixed command waits in full; display
+name and description alone change immediately. With empty `MM_APPROVERS`, key changes
+are disabled. Identical attributes are a no-op when approvers are configured.
+
+Each proposal records the immutable bot ID, complete before/after snapshots, requester
+and creation time. Approvers receive the exact differences in their own language;
+JSON quoting makes spaces, newlines and empty strings explicit. Proposals whose escaped
+diff exceeds 12,000 UTF-8 bytes are rejected before persistence; split them into smaller
+commands so the review fits in one message without truncation.
+Use `!approve <id>` or `!deny <id> [reason]`. The requester cannot approve their own
+creation, import or update; a bulk import submitter also cannot approve that submission
+on behalf of another owner. An approver's own request requires another configured approver.
+Self-denial is allowed. Existing pending requests follow these rules after upgrade.
+
+The manager rechecks ownership, permissions and the bot revision at approval. Intervening
+local changes (even a value changed and then changed back) make the proposal stale;
+submit a fresh request. There is at most one active update proposal per bot. A pending
+proposal can be denied; an in-progress or uncertain update blocks edits and deletion.
+Completed updates retain their old/new snapshots and reviewer/time in the journal.
+Metadata changes also record old/new values and reviewer ID in `metadata_audit`, with
+`source=approval:<request_id>`. Bot IDs, owners and existing tokens are preserved.
+
+`!info` formats both registration and import dates with an explicit UTC offset, e.g.
+`22.10.2026 14:35:08 (UTC+03:00)` with RU and `MM_DISPLAY_TIMEZONE=Europe/Moscow`.
+Storage uses UTC; formatting follows the user's language and never the server locale.
+Missing, malformed or timezone-less historical dates show a localized unknown-date label.
+IANA timezone data is included in the container image.
+
+`!help` includes approval commands only for configured approvers and catalog commands
+only for approvers/catalog viewers. Privileged sections appear only in DM, including
+when help is requested with an empty message or `!`. Public/channel responses contain
+the general section even if the caller is an approver.
+
+### Automatic upgrade and update recovery
+
+Startup automatically migrates the previous release's SQLite or PostgreSQL schema in
+one transaction before recovery and event processing. No manual SQL or migration command
+is required. It adds `bot.revision`, revision triggers, the immutable `bot_update_request`
+journal, its active-request index and `schema_migration` version 1. Existing bot attributes,
+tokens, import history, preferences and pending/resolved requests are preserved. Repeated
+startup is idempotent. If migration fails, its schema changes roll back and startup stops
+before consuming commands; fix the underlying error and restart to retry.
+
+Stop the previous manager and start the new image against the same persisted database
+and configuration. Configure `MM_APPROVERS` for updates, and optionally
+`MM_DISPLAY_TIMEZONE` (default `UTC`; Helm: `mattermost.displayTimezone`). Keep one manager
+per database; mixed-version concurrent operation and downgrading a migrated database
+are unsupported. Older installations with missing repository/criticality still require
+explicit backfill as described below; the migration never invents these attributes.
+
+An update is durably claimed before any Mattermost write. At startup, reconciliation uses
+the immutable bot ID and the recorded reviewer, who must still be configured:
+
+- Remote state matches the target: finish the local update and audit without repeating writes.
+- Remote state matches the original: return to `pending` and require fresh approval.
+- Remote fields are a known mixture of original/target values: apply only the remaining
+  approved fields and finish locally.
+- Remote/local state, ownership or permissions changed unexpectedly: retain `needs_review`
+  and block further mutations. Recovery never disables an existing bot or revokes its tokens.
+
+With the manager stopped, use `uv run python -m mm_bot_manager.recovery list` to inspect sanitized
+unfinished journal identities and `uv run python -m mm_bot_manager.recovery retry` to reconcile again.
+For an unknown state, an operator must first review the proposal and actual bot. Restore
+the original remote values to return the request to pending, or the approved values to
+finish it; then retry recovery. A changed local revision or removed reviewer needs operator
+investigation and is never overwritten automatically. Treat `needs_review` as pending work,
+not as successful application. Recovery may resume remote writes for a known partial update.
 
 ### Language and catalog format
 

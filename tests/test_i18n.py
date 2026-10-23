@@ -55,7 +55,10 @@ def test_translation_keys_placeholders_and_english_commands_are_complete():
         "--repo",
         "--format",
     ):
-        assert command in russian["help.text"] and command in english["help.text"]
+        for translated in (russian, english):
+            assert command in "\n".join(
+                translated[key] for key in ("help.text", "help.catalog", "help.approvers")
+            )
 
 
 def test_missing_russian_key_falls_back_to_english_without_global_state(monkeypatch):

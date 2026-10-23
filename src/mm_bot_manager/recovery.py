@@ -5,7 +5,7 @@ import json
 from contextlib import closing
 from dataclasses import asdict
 
-from .__main__ import _connect_database
+from .__main__ import _connect_database, _resolve_approvers
 from .cli_i18n import parser_for
 from .config import load_settings
 from .db import DbConn, init_schema, transaction
@@ -15,6 +15,7 @@ from .mm_client import MattermostClient
 from .operations import compensate, recover_operations
 from .repository import BotRepo, OperationRecord, OperationRepo, PendingRequestRepo, TokenRepo
 from .runtime import instance_lock
+from .updates import UpdateRepo
 
 
 class RecoveryError(UserFacingError, ValueError):
@@ -45,6 +46,11 @@ async def recover(
     async with MattermostClient(
         settings.mm_rest_base, settings.mm_token, verify_ssl=settings.mm_verify_ssl
     ) as admin:
+        approver_ids: frozenset[str] = frozenset()
+        if operation_id is None and UpdateRepo(conn).unfinished():
+            approver_ids = await _resolve_approvers(
+                admin, settings.approver_usernames, language=settings.mm_default_language
+            )
         factory = CommandContextFactory(
             BotRepo(conn),
             TokenRepo(conn),
@@ -52,7 +58,7 @@ async def recover(
             admin,
             admin,
             "operator",
-            frozenset(),
+            approver_ids,
         )
         ctx = factory.build(caller_user_id="operator", caller_username="operator", channel_id="")
         if operation_id is not None:
@@ -97,7 +103,18 @@ def main() -> int:
         with closing(conn), instance_lock(conn, settings.db_path):
             init_schema(conn)
             if args.command == "list":
-                print(json.dumps([asdict(op) for op in OperationRepo(conn).unfinished()], indent=2))
+                entries = [asdict(op) for op in OperationRepo(conn).unfinished()]
+                for update in UpdateRepo(conn).unfinished():
+                    req = PendingRequestRepo(conn).get(update.request_id)
+                    entries.append(
+                        {
+                            "kind": "bot_update",
+                            "request_id": update.request_id,
+                            "resource": update.bot_user_id,
+                            "status": req.status if req else "needs_review",
+                        }
+                    )
+                print(json.dumps(entries, indent=2))
                 return 0
             if args.command == "acknowledge-missing":
                 acknowledge_missing(conn, args.operation_id)

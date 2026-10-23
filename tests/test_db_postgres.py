@@ -511,3 +511,139 @@ def test_preference_upgrade_preserves_bots_and_rejects_invalid_codes(isolated_pg
         conn.execute(
             "INSERT INTO user_preference (user_id, language) VALUES ('owner', 'unsupported')"
         )
+
+
+@pytest.fixture()
+def previous_pg(pg_dsn):
+    """A previous-version database, created without the new initializer."""
+    conn = connect_postgres(pg_dsn)
+    schema = f"upgrade_{uuid4().hex}"
+    conn.execute(f"CREATE SCHEMA {schema}")
+    conn.execute(f"SET search_path TO {schema}")
+    try:
+        yield conn, schema
+    finally:
+        conn.execute(f"DROP SCHEMA {schema} CASCADE")
+        conn.close()
+
+
+async def test_postgres_previous_release_auto_upgrade_and_update(previous_pg):
+    from mm_bot_manager.repository import PreferenceRepo
+    from tests.test_imports import ALICE, BOT, approver
+    from tests.test_updates import assert_upgrade_preserves_data, propose
+
+    conn, _ = previous_pg
+    ctx = assert_upgrade_preserves_data(conn)
+    PreferenceRepo(conn).language(ALICE, "en")
+    req = await propose(ctx, "--criticality 1")
+    assert "Approved" in await dispatch(approver(ctx), f"!approve {req.request_id}")
+    assert ctx.bot_repo.get(BOT).criticality == 1
+    assert ctx.token_repo.get("keep-token").revoked_at is None
+    assert ctx.pending_repo.get("old-pending").status == "pending"
+
+
+def test_postgres_auto_upgrade_failure_rolls_back_and_can_retry(previous_pg, monkeypatch):
+    from tests.test_imports import BOT
+    from tests.test_updates import install_previous_schema, seed_previous_version
+
+    conn, _ = previous_pg
+    install_previous_schema(conn)
+    seed_previous_version(conn)
+    execute = conn.execute
+
+    def fail(sql, params=()):
+        if "CREATE OR REPLACE FUNCTION advance_bot_revision" in sql:
+            raise RuntimeError("migration failure")
+        return execute(sql, params)
+
+    monkeypatch.setattr(conn, "execute", fail)
+    with pytest.raises(RuntimeError, match="migration failure"):
+        init_schema(conn)
+    columns = {
+        row["column_name"]
+        for row in execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'bot'"
+        )
+    }
+    assert "revision" not in columns
+    assert execute("SELECT to_regclass('bot_update_request') AS name").fetchone()["name"] is None
+    assert TokenRepo(conn).get("keep-token").revoked_at is None
+    monkeypatch.setattr(conn, "execute", execute)
+    init_schema(conn)
+    assert BotRepo(conn).get(BOT).revision == 0
+
+
+async def test_postgres_uncertain_rename_survives_reconnect(isolated_pg, pg_dsn, monkeypatch):
+    from mm_bot_manager.updates import UpdateRepo
+    from tests.test_imports import BOT, approver, import_context
+    from tests.test_updates import UpdateMM, propose, seed_bot
+
+    conn, schema = isolated_pg
+    mm = UpdateMM()
+    ctx = import_context(conn, mm)
+    seed_bot(ctx)
+    req = await propose(ctx, "--username renamed --criticality 1")
+    patch = mm.patch_user
+
+    async def timeout(*args, **kwargs):
+        await patch(*args, **kwargs)
+        raise TimeoutError("private")
+
+    monkeypatch.setattr(mm, "patch_user", timeout)
+    assert "needs review" in await dispatch(approver(ctx), f"!approve {req.request_id}")
+    other = connect_postgres(pg_dsn)
+    try:
+        other.execute(f'SET search_path TO "{schema}"')
+        init_schema(other)
+        reopened = import_context(other, mm)
+        assert await recover_operations(reopened) == 0
+        bot = reopened.bot_repo.get(BOT)
+        assert bot.username == "renamed" and bot.criticality == 1
+        assert UpdateRepo(other).active(BOT) is None
+        assert len(mm.patched) == 1
+        with pytest.raises(Exception, match="immutable"):
+            other.execute(
+                "UPDATE bot_update_request SET old_values = '{}' WHERE request_id = ?",
+                (req.request_id,),
+            )
+    finally:
+        other.close()
+
+
+async def test_postgres_revision_invalidates_aba_proposal(isolated_pg):
+    from tests.test_imports import BOT, approver, import_context
+    from tests.test_updates import UpdateMM, propose, seed_bot
+
+    conn, _ = isolated_pg
+    ctx = import_context(conn, UpdateMM())
+    seed_bot(ctx)
+    req = await propose(ctx)
+    ctx.bot_repo.patch(BOT, description="different")
+    ctx.bot_repo.patch(BOT, description="Existing integration")
+    assert ctx.bot_repo.get(BOT).revision == 2
+    assert "stale" in await dispatch(approver(ctx), f"!approve {req.request_id}")
+    ctx.mm.assert_no_bot_mutations()
+
+
+def test_postgres_only_one_update_proposal_across_connections(isolated_pg, pg_dsn):
+    import asyncio
+
+    from mm_bot_manager.updates import UpdateError, submit_update
+    from tests.test_imports import BOT, import_context
+    from tests.test_updates import UpdateMM, seed_bot
+
+    conn, schema = isolated_pg
+    seed_bot(import_context(conn, UpdateMM()))
+
+    def submit(other):
+        ctx = import_context(other, UpdateMM())
+        try:
+            asyncio.run(submit_update(ctx, ctx.bot_repo.get(BOT), {"criticality": 1}))
+        except UpdateError as exc:
+            assert exc.key == "updates.busy"
+            return False
+        return True
+
+    assert sorted(parallel_connections(pg_dsn, schema, submit)) == [False, True]
+    assert conn.execute("SELECT COUNT(*) AS n FROM bot_update_request").fetchone()["n"] == 1
