@@ -1,0 +1,20 @@
+# Overlay for values-external.yaml, then merge these settings into your site overlay.
+# Contains provider references only; never put token/password values here.
+externalSecrets:
+  enabled: true
+  secretStoreRef:
+    name: vault-mm-bot-manager
+    kind: SecretStore
+  app:
+    data:
+      MM_TOKEN:
+        key: apps/mm-bot-manager/application
+        property: MM_TOKEN
+      MM_BOT_TOKEN:
+        key: apps/mm-bot-manager/application
+        property: MM_BOT_TOKEN
+  database:
+    data:
+      DB_URL:
+        key: apps/mm-bot-manager/external-db
+        property: DB_URL
