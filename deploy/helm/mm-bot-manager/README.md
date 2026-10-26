@@ -12,9 +12,9 @@ health probes.
 ## Prerequisites
 
 - Kubernetes `>= 1.21.1` and Helm 3 or 4;
-- an already-created application Secret (`MM_TOKEN`, `MM_BOT_TOKEN`);
-- either an already-created external database Secret (`DB_URL`) or an
-  already-created PostgreSQL Secret (`POSTGRES_USER`, `POSTGRES_PASSWORD`,
+- an application Secret (`MM_TOKEN`, `MM_BOT_TOKEN`), provided manually or by ESO;
+- either an external database Secret (`DB_URL`) or a
+  PostgreSQL Secret (`POSTGRES_USER`, `POSTGRES_PASSWORD`,
   `POSTGRES_DB`);
 - one application image for external mode; application and PostgreSQL images for
   internal mode. Both can be referenced by tag or immutable digest.
@@ -37,7 +37,8 @@ and disappear if that node is lost.
 ## Values and defaults
 
 Passwords and tokens do not belong in values. Secret names below are contracts:
-the chart reads the listed fixed keys and does not create Secrets itself.
+the chart reads the listed fixed keys and never renders Secret values. By default
+it references existing Secrets; optional ESO resources create/update those same Secrets.
 
 | Section | Default | Purpose |
 | --- | --- | --- |
@@ -45,6 +46,12 @@ the chart reads the listed fixed keys and does not create Secrets itself.
 | `imagePullSecrets` | `[]` | Pod image pull Secret references, e.g. `[{name: harbor-pull}]`. |
 | `nameOverride`, `fullnameOverride` | `""`, `""` | Override generated resource names. |
 | `app.existingSecret` | `mm-bot-manager-app` | Secret with `MM_TOKEN` and `MM_BOT_TOKEN`. |
+| `externalSecrets.enabled` | `false` | Render optional ExternalSecret resources; existing Secrets remain the default. |
+| `externalSecrets.apiVersion` | `external-secrets.io/v1` | Explicit CRD API; `external-secrets.io/v1beta1` is also supported for compatible installations. |
+| `externalSecrets.secretStoreRef` | `name=""`, `kind=SecretStore` | Existing store; name is required when ESO is enabled. Kind may be `ClusterSecretStore`. |
+| `externalSecrets.refreshInterval` | `1h` | Positive duration using `h`, `m`, `s`, `ms` units (e.g. `30m`, `1h30m`); zero is rejected. |
+| `externalSecrets.app` | `enabled=true`, `data={}` | When ESO is enabled, map both application keys to remote references, or set `enabled=false` to retain manual provisioning. |
+| `externalSecrets.database` | `enabled=true`, `data={}` | Map the active database's keys, or set `enabled=false`. The database mode selects its existingSecret target. |
 | `mattermost` | `url=https://mm.example.com`, `approvers=""`, `catalogViewers=""`, `defaultLanguage=en`, `displayTimezone=UTC`, `verifySSL=true` | Imports and key attribute updates require `approvers`. Self-approval is forbidden. Global catalog readers are approvers plus `catalogViewers`. Dates use an IANA `displayTimezone`, e.g. `Europe/Moscow`. |
 | `mattermost.caBundle` | `existingConfigMap=""`, `key=ca-bundle.crt` | Optional complete PEM trust bundle for a private Mattermost CA. Mounted read-only; `SSL_CERT_FILE` applies to HTTP and WebSocket clients. Restart after changing its external ConfigMap. |
 | `logLevel` | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
@@ -92,6 +99,79 @@ the database; they do not establish Mattermost WebSocket readiness.
 | `app.existingSecret` | `MM_TOKEN`, `MM_BOT_TOKEN` |
 | `database.external.existingSecret` | `DB_URL` |
 | `database.internal.auth.existingSecret` | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` |
+
+## External Secrets Operator (optional)
+
+ESO is opt-in and does not change Deployment, PostgreSQL or maintenance Job
+Secret references. Install ESO and its CRDs separately, and configure a ready
+`SecretStore` in the release namespace or an approved `ClusterSecretStore`.
+The chart creates neither the operator, stores, Vault authentication credentials
+nor extra RBAC. The application ServiceAccount remains token-less.
+The base chart's Kubernetes `>=1.21.1` declaration does **not** establish ESO
+compatibility: check the selected ESO release, CRDs and real cluster version.
+Select an API version actually served by the installed CRDs; there is no automatic
+discovery or fallback, so offline `helm template` still works.
+
+Use `examples/values-eso-external.yaml` after the external PostgreSQL profile,
+or `examples/values-eso-internal.yaml` after any internal profile. These are
+overlays containing remote **references**, not credentials. From this chart directory:
+
+```bash
+helm lint . -f examples/values-external.yaml -f examples/values-eso-external.yaml
+helm template mm-bot-manager . --namespace mm-bot-manager \
+  -f examples/values-external.yaml -f examples/values-eso-external.yaml
+helm template mm-bot-manager . --namespace mm-bot-manager \
+  -f examples/values-internal-longhorn.yaml -f examples/values-eso-internal.yaml
+```
+
+`data` maps each fixed Secret key to `remoteRef` fields: required `key`, optional
+`property` and optional string `version`. For Vault KV v2, `key` is relative to
+the mount configured in the store (do not add the API's `/data/` segment), and
+`property` selects the field containing that credential. No literal value fields
+or arbitrary output keys are accepted. The active targets require all their keys;
+internal database mappings cannot be used with external mode or vice versa.
+
+For mixed provisioning, set `externalSecrets.app.enabled=false` or
+`externalSecrets.database.enabled=false` and provision that existing Secret
+manually. With ESO globally enabled at least one target must be enabled, and the
+application/database Secret names must differ. Keep target names unique to the
+release; do not let multiple controllers write the same Secret.
+
+ExternalSecret names are release-scoped with `-app` and `-database` suffixes;
+their targets are exactly `app.existingSecret` and the selected database's
+`existingSecret`. Targets use `creationPolicy: Orphan` and `deletionPolicy: Retain`:
+they remain if the ExternalSecret/release is removed, ESO is disabled, or provider
+data disappears. A failed synchronization can therefore leave old credentials;
+monitor `Ready` and refresh status. Disabling ESO stops future synchronization
+and leaves manual management possible. Removing an older ExternalSecret with a
+different ownership policy is a separate migration; these settings do not change
+other controllers' owner references.
+
+Before enabling ESO for an existing Secret, ensure Vault contains the **current**
+working values and the target has no competing controller. ESO will reconcile
+its managed keys, so do not keep applying local env files to ESO-managed targets.
+To return to manual provisioning, disable the relevant ESO target first, verify
+its ExternalSecret was removed and its Kubernetes Secret remains, then manage
+that Secret manually. Retained Secrets require explicit cleanup after uninstall.
+
+On first install, the Helm readiness wait can include the time ESO needs to
+create the Secrets. After install, check the ExternalSecrets' `Ready` conditions
+and key names, then perform application acceptance. On rotation, ESO updates
+Secrets but does not refresh running environment variables: coordinate credential
+replacement, wait for synchronization and restart the application. The chart does
+not install a restart controller. Its single-replica `Recreate` strategy entails
+an interruption. For an initialized internal database, changing Vault or a Secret
+does not change the PostgreSQL role password; coordinate the database change and
+client restarts in a maintenance window. Never regenerate the database/user name
+for an existing data PVC.
+
+Secrets still exist in Kubernetes/etcd: use narrow RBAC, encryption at rest and
+protected backups. This integration supplies startup credentials; it does not
+save newly minted Mattermost bot tokens in Vault. See the source checkout's
+`docs/kubernetes.md` section 3.1 for setup, synchronization and rotation commands.
+Provider setup and behavior are documented by
+[ESO's Vault provider](https://external-secrets.io/latest/provider/hashicorp-vault/)
+and [ExternalSecret API](https://external-secrets.io/latest/api/externalsecret/).
 
 ## Validate and render
 

@@ -1,0 +1,26 @@
+# Overlay for an internal database profile, then merge into your site overlay.
+# POSTGRES_USER/POSTGRES_DB must match the initialized database on an existing PVC.
+externalSecrets:
+  enabled: true
+  secretStoreRef:
+    name: vault-mm-bot-manager
+    kind: SecretStore
+  app:
+    data:
+      MM_TOKEN:
+        key: apps/mm-bot-manager/application
+        property: MM_TOKEN
+      MM_BOT_TOKEN:
+        key: apps/mm-bot-manager/application
+        property: MM_BOT_TOKEN
+  database:
+    data:
+      POSTGRES_USER:
+        key: apps/mm-bot-manager/internal-db
+        property: POSTGRES_USER
+      POSTGRES_PASSWORD:
+        key: apps/mm-bot-manager/internal-db
+        property: POSTGRES_PASSWORD
+      POSTGRES_DB:
+        key: apps/mm-bot-manager/internal-db
+        property: POSTGRES_DB

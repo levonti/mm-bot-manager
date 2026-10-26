@@ -16,7 +16,8 @@ Follow this route for a **first installation**:
 1. [Choose and save the configuration](#1-prerequisites-and-site-configuration)
    in `.local/kubernetes/deployment.env`, then fill the adjacent `values-site.yaml`.
 2. [Publish images and prepare registry access](#2-prepare-images-and-registry-authentication).
-3. [Create the application and selected database Secrets](#3-applicationdatabase-secrets-and-mattermost-ca).
+3. [Provide the application and selected database Secrets](#3-applicationdatabase-secrets-and-mattermost-ca),
+   manually or through [External Secrets Operator](#31-optional-vault-delivery-with-eso).
 4. [Check and install the saved configuration](#4-validate-and-install-the-exact-configuration).
 5. [Complete acceptance](#5-acceptance-and-diagnosis), including a real backup verification.
 
@@ -568,6 +569,12 @@ check. Untested nodes or repositories remain **NOT_TESTED**.
 
 ## 3. Application/database Secrets and Mattermost CA
 
+Existing Kubernetes Secrets remain the default. To use Vault through ESO, follow
+[section 3.1](#31-optional-vault-delivery-with-eso) and skip the manual creation
+commands below **only for the targets managed by ESO**. Application and database
+provisioning can be selected independently. All profiles keep the same Secret
+names and key contracts; no literal credentials belong in Helm values.
+
 Working env copies must contain real values only locally. Prepare missing copies
 with the helper and edit them using an editor; never paste credentials into shell
 commands, values, logs or tickets. Ensure existing env files have mode 0600 before
@@ -650,7 +657,145 @@ coordinate `ALTER ROLE`, then update the matching Secret and restart clients and
 the StatefulSet in a maintenance window. Never change `POSTGRES_USER`/`POSTGRES_DB`
 on an existing data PVC as if it were an initialization procedure.
 
-**Private Mattermost CA only — skip for a publicly trusted endpoint:** create a ConfigMap
+### 3.1 Optional Vault delivery with ESO
+
+This mode delivers startup credentials from Vault to ordinary Kubernetes Secrets.
+It does not store newly issued bot tokens in Vault. ESO, its CRDs and the selected
+Vault store must already be installed/configured by the platform operator; this
+chart adds only `ExternalSecret` resources. Do not assume the chart's minimum
+Kubernetes 1.21.1 version establishes compatibility with a current ESO release.
+Verify the actual cluster/ESO/Vault versions, operator namespace scope and served
+CRD APIs before enabling the mode:
+
+```bash
+kubectl get crd externalsecrets.external-secrets.io \
+  -o jsonpath='{range .spec.versions[*]}{.name}{" served="}{.served}{"\n"}{end}'
+```
+
+Default API is `external-secrets.io/v1`; set
+`externalSecrets.apiVersion: external-secrets.io/v1beta1` only if your selected
+ESO installation supports that API. Choosing the older API does not by itself
+make a new operator compatible with an old Kubernetes version. The chart does
+not install ESO images or fetch dependencies, including in disconnected clusters.
+
+Prepare a dedicated namespaced `SecretStore` (preferred) or an approved
+`ClusterSecretStore`. A reference manifest is shipped as
+`deploy/helm/mm-bot-manager/examples/vault-secret-store.yaml.example`; save your
+edited copy in the ignored `.local/kubernetes/` directory. Its ServiceAccount is
+separate from the application's token-less ServiceAccount. Configure a Vault role
+bound to that namespace/ServiceAccount and matching JWT audience, read-only access
+only to the needed KV paths, ESO TokenRequest permissions and Vault TokenReview
+access according to your authentication setup. Configure the real Vault URL,
+KV mount and CA trust; never disable TLS verification or put a static Vault token
+in values. See the official
+[ESO Vault authentication guide](https://external-secrets.io/latest/provider/hashicorp-vault/#kubernetes-authentication)
+and [Vault Kubernetes Auth](https://developer.hashicorp.com/vault/docs/auth/kubernetes).
+Apply the edited infrastructure manifest separately; no live secret values are
+needed in that manifest. Verify the store is ready, substituting its real name:
+
+```bash
+kubectl -n mm-bot-manager wait secretstore/vault-mm-bot-manager \
+  --for=condition=Ready --timeout=2m
+```
+
+Merge the `externalSecrets` section from the appropriate example into the
+**existing** site overlay selected by `deployment.env`:
+
+- external PostgreSQL: `deploy/helm/mm-bot-manager/examples/values-eso-external.yaml`;
+- internal PostgreSQL (Longhorn, local-path or Harbor):
+  `deploy/helm/mm-bot-manager/examples/values-eso-internal.yaml`.
+
+Keep the existing site image, Mattermost, Secret-name and storage settings; these
+files are additional overlays, not replacement deployment profiles. The deploy
+helper still merges the selected database profile first, then the saved site.
+Change store name/kind and remote references to match your Vault layout. The store
+contains the KV mount; each `key` is relative to that mount, without `/data/`.
+Each `property` selects the Vault field for the fixed Kubernetes Secret key:
+
+| Target | Required mappings | Secret name from values |
+| --- | --- | --- |
+| Application | `MM_TOKEN`, `MM_BOT_TOKEN` | `app.existingSecret` |
+| External DB | `DB_URL` | `database.external.existingSecret` |
+| Internal DB | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | `database.internal.auth.existingSecret` |
+
+Mappings accept `key`, optional `property` and optional string `version`; values
+and unknown fields are rejected. Version pins deliberately prevent adoption of
+new KV versions until the pin is updated. `refreshInterval` defaults to `1h` and
+must be a positive duration using `h`, `m`, `s`, `ms`. To keep either target manual,
+set `externalSecrets.app.enabled: false` or
+`externalSecrets.database.enabled: false`; omit its mappings and prepare that
+Secret using the earlier commands. `externalSecrets.enabled` defaults to `false`;
+when true, at least one target and a non-empty store name are required. The two
+target Secret names must differ and must not be shared with another release.
+
+For migration, first populate Vault with the **existing working credentials**.
+Confirm the target Secret is not immutable and is not owned/reconciled by another
+controller. Enabling ESO allows it to update the mapped keys. Stop applying env
+files to that target after handover. Do not delete a working Secret to enable ESO.
+
+Use the normal `check` and `apply` commands from section 4. On initial installation
+the workload may wait for ESO to create the target Secrets within Helm's timeout.
+An absent CRD, inaccessible store or failed synchronization must be resolved before
+acceptance; do not silently fall back to putting values in the chart. In another
+terminal, or after installation, inspect metadata/status without printing values:
+
+```bash
+kubectl -n mm-bot-manager get externalsecrets \
+  -l app.kubernetes.io/instance=mm-bot-manager
+kubectl -n mm-bot-manager wait externalsecret \
+  -l app.kubernetes.io/instance=mm-bot-manager \
+  --for=condition=Ready --timeout=2m
+```
+
+Check required key **names only** with the command in section 3, then complete
+section 5's Mattermost/database acceptance. An ESO `Ready` condition is not proof
+that a token is accepted by Mattermost or that the PostgreSQL password matches.
+
+For a later rotation, record current refresh times, update the real credential
+and matching Vault field in a coordinated order, then request synchronization:
+
+```bash
+kubectl -n mm-bot-manager get externalsecrets \
+  -l app.kubernetes.io/instance=mm-bot-manager \
+  -o custom-columns=NAME:.metadata.name,REFRESH_TIME:.status.refreshTime
+kubectl -n mm-bot-manager annotate externalsecret \
+  -l app.kubernetes.io/instance=mm-bot-manager \
+  force-sync="$(date +%s)" --overwrite
+```
+
+Wait for **every affected** ExternalSecret's `refreshTime` to advance past the
+Vault update and its condition to be `Ready=True`. Repeat the status commands;
+`wait Ready` alone can return immediately for an earlier successful sync. Then
+restart and verify the application:
+
+```bash
+kubectl -n mm-bot-manager rollout restart deployment/mm-bot-manager
+kubectl -n mm-bot-manager rollout status deployment/mm-bot-manager --timeout=5m
+```
+
+Complete section 5's functional checks before retiring an overlapping old
+Mattermost token. The chart installs no restart controller; refreshing a Secret
+does not change an existing process environment. Its single replica and `Recreate`
+strategy cause an interruption. For internal PostgreSQL, coordinate `ALTER ROLE`,
+Vault/Secret updates and client/StatefulSet restarts in a maintenance window;
+changing `POSTGRES_PASSWORD` alone never changes an initialized role. Leave the
+existing database/user names unchanged on a populated PVC.
+
+Targets use `creationPolicy: Orphan` and `deletionPolicy: Retain`. Disabling ESO,
+removing its ExternalSecret or uninstalling the release retains the Kubernetes
+Secrets. Provider deletion or Vault unavailability can leave the last synchronized
+values usable only while the real credentials remain valid. Monitor failed/stale
+synchronization. To revert to manual management, disable the selected ESO target,
+apply the change and verify that its ExternalSecret disappeared **and its Secret
+remains** before resuming manual updates. Helm rollback does not undo values
+already synchronized into an orphan Secret; coordinate any credential rollback
+with Vault, Mattermost/PostgreSQL and application restarts. Retained Secrets need
+explicit cleanup when decommissioning. Keep etcd encryption, least-privilege RBAC
+and backup protection: ESO still creates a Kubernetes copy of each secret.
+
+### 3.2 Private Mattermost CA
+
+**Skip for a publicly trusted endpoint:** create a ConfigMap
 containing a complete PEM trust bundle: the organization's CA chain plus any
 public roots required by your endpoint. Configure `mattermost.caBundle.existingConfigMap`
 as `mm-bot-manager-ca` in the site overlay, keeping `verifySSL: true`.
@@ -707,6 +852,14 @@ network/storage health.
 Before deployment to a disconnected cluster, validate manifests with local
 Kubernetes schemas using
 `KUBECONFORM_SCHEMA_LOCATION=/path/to/1.21.1-schemas ./scripts/verify-kubernetes.sh`.
+To also validate the four ESO-enabled profiles offline, set
+`EXTERNAL_SECRETS_SCHEMA_LOCATION=/path/to/eso-schemas` alongside it. This must be
+a local directory containing `externalsecret-external-secrets-v1.json`, extracted
+from the selected ESO CRD's `spec.versions[].schema.openAPIV3Schema`. The verifier
+does not download schemas or ignore missing ones. Without the ESO schema directory
+it explicitly reports that optional CRD schema validation was skipped; normal Helm
+render/schema tests still cover ESO. Rendering with Kubernetes 1.21.1 here checks
+manifest shape, not operator runtime compatibility with that Kubernetes release.
 The server-side dry run also checks the destination cluster's admission policies
 and creates no persistent objects. The explicit timeout allows initial storage
 provisioning more time than Helm's default five minutes. See the

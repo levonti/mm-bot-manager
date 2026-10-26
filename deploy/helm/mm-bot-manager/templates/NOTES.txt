@@ -8,3 +8,14 @@ View logs:
 
 Readiness checks database reachability, not Mattermost WebSocket connectivity.
 Complete the acceptance checklist in docs/kubernetes.md after installation.
+{{ if .Values.externalSecrets.enabled }}
+External Secrets Operator is enabled. The operator, CRDs and referenced store
+must already be configured. Check synchronization without printing secret values:
+  kubectl -n {{ .Release.Namespace }} get externalsecrets -l app.kubernetes.io/instance={{ .Release.Name }}
+
+ESO refreshes Kubernetes Secrets; application environment variables are read at
+startup. Restart the application after a coordinated credential rotation and
+complete acceptance checks. Internal PostgreSQL role passwords must be changed
+in PostgreSQL too; updating a Secret does not change an initialized database.
+ESO target Secrets remain after disabling ESO or uninstalling this release.
+{{ end }}
