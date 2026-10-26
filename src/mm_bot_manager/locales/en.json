@@ -233,5 +233,11 @@
   "help.catalog": "**Global catalog (DM only)**\n- `!catalog [--criticality <1|2|3>] [--owner <name>] [--search <text>] [--page <n>] [--format cards|table]` — read the registry; format is saved per user.",
   "help.approvers": "**Approvers only**\n- `!approve <request_id>` — approve creation, import or update; self-approval is forbidden\n- `!deny <request_id> [reason]` — deny a request\nUpdates and imports are approved in DM. Registry-only changes may be proposed for other owners.",
   "updates.people_unavailable": "Could not verify active requester and approver accounts. The request remains pending; try again later.",
-  "updates.review_too_large": "The complete update is too large to review in one message. Split it into smaller commands."
+  "updates.review_too_large": "The complete update is too large to review in one message. Split it into smaller commands.",
+  "validation.text_required": "Field {field} must be text.",
+  "validation.username_length": "Username must contain between 1 and 64 characters.",
+  "validation.username_character": "Username: invalid character {codepoint} at position {position}. Use lowercase Latin letters a-z, digits 0-9, periods, hyphens and underscores.",
+  "validation.username_reserved": "This username is reserved by Mattermost. Choose another username.",
+  "validation.username_suffix": "New bot usernames must end with -bot.",
+  "validation.text_length": "Field {field} must contain at most {limit} Unicode characters."
 }

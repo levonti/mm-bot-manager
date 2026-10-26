@@ -100,6 +100,28 @@ configuration (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`), then
 Talk to the manager bot via DM, or @-mention it in any channel.
 Every command must start with `!`. New bot usernames passed to `!create` must end in `-bot`.
 
+Bot creation and updates share the same field validation. Usernames must contain
+1–64 characters from `a-z`, `0-9`, `.`, `_`, and `-`; `all`, `channel`, `matterbot`,
+and `system` are reserved. Uppercase letters, Cyrillic lookalikes, spaces, and
+invisible characters are rejected without automatic replacement. The `-bot`
+suffix is required for creation only; renaming and imported legacy names do not
+acquire a new suffix requirement.
+
+Display names allow up to 64 Unicode code points and descriptions up to 1024,
+including Russian text. Omitted fields remain unchanged; `--display-name ""`
+and `--description ""` clear those fields. An empty username is invalid.
+All supplied fields are checked before a creation/update request is stored or
+sent to approvers, and again before an approved request is claimed or applied.
+Invalid requests stay pending so they can be denied and resubmitted correctly.
+An invalid field prevents the entire command from changing bot data.
+Unchanged legacy fields are not revalidated during a partial update.
+Repository and criticality validation continues to use the shared metadata rules.
+
+These limits follow the Mattermost [username model](https://github.com/mattermost/mattermost/blob/v10.11.0/server/public/model/user.go)
+and [bot model](https://github.com/mattermost/mattermost/blob/v10.11.0/server/public/model/bot.go).
+Mattermost remains authoritative for name availability and server-specific rules;
+a valid local value can still receive an API error.
+
 | Command                                                                                              | What it does                                                          |
 | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | `!language [ru\|en\|auto]` | Show or save your language preference in DM |
