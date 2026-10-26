@@ -57,11 +57,11 @@ verify:
     - uv run --no-sync python scripts/release.py check
     - |
       if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" ]; then
-        git fetch origin "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+        git -c http.sslCAInfo="${CI_SERVER_TLS_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}" fetch origin "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
         uv run --no-sync python scripts/release.py check --base "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
       fi
       if [ -n "${CI_COMMIT_TAG:-}" ]; then
-        git fetch origin "$CI_DEFAULT_BRANCH"
+        git -c http.sslCAInfo="${CI_SERVER_TLS_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}" fetch origin "$CI_DEFAULT_BRANCH"
         git merge-base --is-ancestor "$CI_COMMIT_SHA" FETCH_HEAD
       fi
     - uv run --no-sync ruff check src tests scripts/release.py

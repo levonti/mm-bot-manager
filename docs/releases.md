@@ -93,6 +93,9 @@ The image job uses Docker 27.5.1 with TLS-enabled Docker-in-Docker. Before publi
   `/certs/client` volume; route the image job with runner tags if required by the
   installation. An online runner alone does not prove these settings are present.
 - Enable the project container registry and allow CI job credentials to push.
+- For an internal GitLab CA, configure the runner to provide
+  `CI_SERVER_TLS_CA_FILE`. Verification fetches use this CA file without disabling
+  TLS certificate checks; public CAs use the system trust bundle.
 - Make the GitLab CLI image and other pinned build images reachable by the runner.
   The release job uses GitLab's rolling official CLI image; pin an approved
   version/digest if the installation requires fully pinned tooling.
