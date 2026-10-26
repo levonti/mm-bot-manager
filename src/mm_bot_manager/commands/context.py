@@ -26,6 +26,8 @@ class CommandContext:
     default_language: str = "en"
     language_resolver: LanguageResolver | None = None
     display_timezone: str = "UTC"
+    post_id: str = ""
+    file_ids: tuple[str, ...] = ()
 
     def tr(self, key: str, **params: Any) -> str:
         return tr(self.language, key, **params)

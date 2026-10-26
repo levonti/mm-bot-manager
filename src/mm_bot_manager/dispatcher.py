@@ -81,6 +81,15 @@ async def handle_event(
         channel_id=channel_id,
         channel_type=channel_type,
     )
+    attached = post.get("file_ids", [])
+    ctx = replace(
+        ctx,
+        post_id=post_id,
+        file_ids=tuple(attached)
+        if isinstance(attached, list)
+        and all(isinstance(item, str) and re.fullmatch(r"[a-z0-9]{26}", item) for item in attached)
+        else ("invalid",),
+    )
     log.info("dispatching", user_id=sender_id, channel_id=channel_id, post_id=post_id)
     try:
         try:

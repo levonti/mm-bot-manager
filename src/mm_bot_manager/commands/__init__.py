@@ -4,6 +4,7 @@ from dataclasses import replace
 from ..localization import user_language
 from . import (
     approve,
+    bot_image,
     catalog,
     create_bot,
     delete_bot,
@@ -26,6 +27,8 @@ from .parser import ParsedArgs, parse_command
 Handler = Callable[[CommandContext, ParsedArgs], Awaitable[str]]
 
 REGISTRY: dict[tuple[str, ...], Handler] = {
+    ("avatar",): bot_image.avatar,
+    ("icon",): bot_image.icon,
     ("help",): help_cmd.handle,
     ("create",): create_bot.handle,
     ("import",): import_bot.handle,

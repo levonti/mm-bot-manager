@@ -239,5 +239,14 @@
   "validation.username_character": "Username: invalid character {codepoint} at position {position}. Use lowercase Latin letters a-z, digits 0-9, periods, hyphens and underscores.",
   "validation.username_reserved": "This username is reserved by Mattermost. Choose another username.",
   "validation.username_suffix": "New bot usernames must end with -bot.",
-  "validation.text_length": "Field {field} must contain at most {limit} Unicode characters."
+  "validation.text_length": "Field {field} must contain at most {limit} Unicode characters.",
+  "images.usage": "Usage: `!{kind} set <username>` with one PNG/JPEG attachment, or `!{kind} reset <username>` without attachments. Up to 5 MiB and 4096×4096. !icon and !avatar are aliases.",
+  "images.dm": "Images can only be changed in a direct message to this manager.",
+  "images.attachment": "For set, attach exactly one file you uploaded to this same message. For reset, send no attachments.",
+  "images.invalid": "Invalid image. Attach a single-frame PNG/JPEG, up to 5 MiB and 4096×4096. SVG and animated images are not accepted.",
+  "images.failed": "Could not change image: {error}",
+  "images.uncertain": "The image change outcome is uncertain. Check the image in Mattermost before retrying; no automatic retry will occur.",
+  "images.unavailable": "Could not download the attachment. Try again later.",
+  "images.done": "Image operation completed for `@{username}`: `{kind} {action}`.",
+  "images.help": "**Bot images (DM, owner only)**\n`!icon set <username>` + one PNG/JPEG attachment — set the bot profile image.\n`!icon reset <username>` — restore the default image.\n`!avatar set/reset <username>` — aliases for the same operations.\nMaximum: 5 MiB and 4096×4096. Images are centered and cropped to 512×512 PNG."
 }
