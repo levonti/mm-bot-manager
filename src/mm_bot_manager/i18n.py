@@ -53,6 +53,13 @@ def error_text(error: BaseException, language: str) -> str:
     if isinstance(error, UserFacingError) and error.key in catalog("en"):
         return tr(language, error.key, **error.params)
     if isinstance(error, MattermostError):
+        if error.diagnostic_id:
+            return tr(
+                language,
+                "error.api_diagnostic",
+                status=error.status,
+                diagnostic_id=error.diagnostic_id,
+            )
         return tr(language, "error.api", status=error.status)
     return tr(language, "error.unexpected")
 

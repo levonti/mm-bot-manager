@@ -56,7 +56,8 @@ async def _create_now(
         return ctx.tr("approve.could_not_create_bot", v0=ctx.error(e))
     except MattermostError as e:
         if e.status == 403:
-            return ctx.tr("create_bot.could_not_create_bot_permission_denied_mm")
+            reply = ctx.tr("create_bot.could_not_create_bot_permission_denied_mm")
+            return f"{reply} {ctx.error(e)}" if e.diagnostic_id else reply
         return ctx.tr("approve.could_not_create_bot", v0=ctx.error(e))
 
     return ctx.tr(

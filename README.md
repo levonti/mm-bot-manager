@@ -434,6 +434,18 @@ uv run pytest --cov=mm_bot_manager --cov-branch --cov-fail-under=85
   policies; this is not a disappearing or one-time retrieval mechanism.
 - Application DEBUG logging does not enable HTTP/WebSocket frame dumps. Incoming command
   bodies and remote exception bodies are omitted from dispatch and recovery logs.
+- Failed Mattermost HTTP requests emit `mattermost_api_error` at WARNING (4xx) or ERROR
+  (5xx) to stderr, visible with the default `LOG_LEVEL=INFO`. CLI JSON output on stdout
+  remains unchanged. Each entry includes `diagnostic_id`,
+  HTTP method, route template (without resource values or query parameters), status,
+  and `elapsed_ms`. Validated Mattermost error codes and request IDs are included when
+  available. Only exact allowlisted generic server messages are logged; all others
+  become `[omitted]`. Request/response bodies, headers, and exception text are not dumped.
+  API error replies include the same diagnostic ID in English and Russian. Find it with
+  `docker compose logs --since=10m mm-bot-manager` or your Pod log viewer, then search
+  for that ID. These fields require an updated application image; changing `LOG_LEVEL`
+  on an older image does not add diagnostics. An omitted message can be investigated
+  in the Mattermost server logs using the validated request ID and timestamp.
 - A failed or uncertain token delivery triggers revocation. If revocation fails, the
   journal retains the operation for recovery and blocks further issuance for that bot.
 - Ownership is enforced in the local DB. If someone bypasses this manager and edits a bot

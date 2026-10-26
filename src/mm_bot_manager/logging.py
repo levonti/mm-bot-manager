@@ -33,5 +33,9 @@ def configure_logging(level: str = "INFO") -> None:
     )
 
 
-def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
+def get_logger(name: str | None = None, *, stderr: bool = False) -> structlog.stdlib.BoundLogger:
+    if stderr:
+        # Resolve the stream at call time, including for CLI callers that have
+        # not configured logging. Keep their machine-readable stdout intact.
+        return structlog.wrap_logger(structlog.PrintLogger(file=sys.stderr))  # type: ignore[no-any-return]
     return structlog.get_logger(name)  # type: ignore[no-any-return]

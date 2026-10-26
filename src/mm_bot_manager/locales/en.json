@@ -109,6 +109,7 @@
   "import_bots.every_csv_row_must_contain_four_nonempty": "Every CSV row must contain four nonempty fields.",
   "import_bots.duplicate_bot_ids_in_csv_use_one": "Duplicate bot IDs in CSV; use one explicit owner per bot.",
   "error.api": "Mattermost API error (HTTP {status}). Contact the operator if it persists.",
+  "error.api_diagnostic": "Mattermost API error (HTTP {status}). Diagnostic ID: {diagnostic_id}. Contact the operator if it persists.",
   "error.unexpected": "Something went wrong running that command. Contact the operator.",
   "language.usage": "Usage: `!language [ru|en|auto]`",
   "language.dm": "Language preferences can only be changed in a direct message.",

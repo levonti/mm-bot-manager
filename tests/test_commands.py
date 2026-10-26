@@ -204,6 +204,19 @@ async def test_create_mm_403(ctx):
     assert "permission denied" in reply
 
 
+@pytest.mark.parametrize("status", [400, 403])
+async def test_create_api_error_keeps_diagnostic_id(ctx, status):
+    make, mm, *_ = ctx
+    mm.raise_on["create_bot"] = MattermostError(
+        status, "secret server detail", diagnostic_id="a" * 32
+    )
+    reply = await dispatch(
+        make(), "!create demo-bot --repo https://git.example/team/project --criticality 2"
+    )
+    assert "a" * 32 in reply
+    assert "secret server detail" not in reply
+
+
 # ── list / info ───────────────────────────────────────────────────────────────
 
 
