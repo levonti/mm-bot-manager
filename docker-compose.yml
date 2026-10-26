@@ -3,6 +3,13 @@ services:
     build: .
     image: ${MM_BOT_MANAGER_IMAGE:-mm-bot-manager:local}
     restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
     stop_grace_period: ${STOP_GRACE_PERIOD:-65s}
     depends_on:
       postgres:

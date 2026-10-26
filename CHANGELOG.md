@@ -4,6 +4,11 @@
 
 ### Security
 
+- Remove mount, nsenter and infocmp entry points, unused system libpq dependencies
+  and setuid/setgid bits from the runtime image. Run Compose as UID/GID 1000 with
+  no capabilities, no privilege escalation, a read-only root filesystem and a
+  temporary writable `/tmp`; runtime package installation and privileged CLI
+  maintenance require a separate diagnostic container.
 - Update vulnerable AnyIO, certifi, idna, pydantic-settings and development
   urllib3 dependencies, with minimum secure versions enforced by the resolver.
 - Remove pip and its vendored dependencies from the final runtime image.

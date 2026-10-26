@@ -23,10 +23,13 @@ ENV MM_BUILD_REVISION=$MM_BUILD_REVISION
 LABEL org.opencontainers.image.version=$APP_VERSION \
       org.opencontainers.image.revision=$MM_BUILD_REVISION
 
-# OS runtime packages; psycopg[binary] supplies its own libpq.
-RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tzdata \
+# psycopg[binary] supplies libpq; system libpq and its dependencies are unnecessary.
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata \
+    && apt-get purge -y --auto-remove mount \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip uninstall --yes pip
+    && python -m pip uninstall --yes pip \
+    # Keep Essential package metadata intact; remove unused vulnerable CLI entry points.
+    && rm -f /usr/bin/nsenter /usr/bin/infocmp
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -38,7 +41,9 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
 
-RUN useradd --system --uid 1000 --home /app mmbot
+RUN groupadd --system --gid 1000 mmbot \
+    && useradd --system --uid 1000 --gid 1000 --home /app mmbot \
+    && find /usr /bin /sbin -xdev -type f -perm /6000 -exec chmod a-s {} +
 USER mmbot
 
 CMD ["python", "-m", "mm_bot_manager"]

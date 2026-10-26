@@ -67,9 +67,9 @@ verify:
         git -c http.sslCAInfo="${CI_SERVER_TLS_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}" fetch origin "$CI_DEFAULT_BRANCH"
         git merge-base --is-ancestor "$CI_COMMIT_SHA" FETCH_HEAD
       fi
-    - uv run --no-sync ruff check src tests scripts/release.py
-    - uv run --no-sync ruff format --check src tests scripts/release.py
-    - uv run --no-sync mypy src
+    - uv run --no-sync ruff check src tests scripts/release.py scripts/check_runtime_security.py
+    - uv run --no-sync ruff format --check src tests scripts/release.py scripts/check_runtime_security.py
+    - uv run --no-sync mypy src scripts/check_runtime_security.py
     - helm lint deploy/helm/mm-bot-manager
     - uv run --no-sync pytest -q --cov=mm_bot_manager --cov-branch --cov-fail-under=85 --cov-report=term-missing --cov-report=xml:coverage.xml --junitxml=report.xml
   artifacts:
@@ -191,6 +191,11 @@ build-release-image:
         --metadata-file build-metadata.json .
       digest="$(jq -er '."containerimage.digest" | select(test("^sha256:[a-f0-9]{64}$"))' build-metadata.json)"
       printf 'RELEASE_IMAGE=%s@%s\n' "$DOCKERHUB_IMAGE" "$digest" > image.env
+    - >-
+      docker run --rm -i --platform linux/amd64 --network none --read-only
+      --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+      --cap-drop ALL --security-opt no-new-privileges:true
+      "$DOCKERHUB_IMAGE@$digest" python -I - < scripts/check_runtime_security.py
   artifacts:
     expire_in: never
     paths:

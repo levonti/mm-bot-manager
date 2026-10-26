@@ -125,6 +125,15 @@ currently produces Linux amd64 only.
 
 ## Vulnerability scanning
 
+The release-image build job also runs `scripts/check_runtime_security.py` inside
+the exact pushed digest with UID/GID 1000, no capabilities, no-new-privileges,
+read-only root and writable temporary `/tmp`. It checks that vulnerable unused
+entry points and setuid/setgid files have not returned and exercises application
+imports, CA loading and temporary storage. A failed check fails the image job;
+as with the scan below, it does not retract already-pushed tags. The
+[Debian High review](security/debian-high-2026-10-26.md) distinguishes absent
+components from mitigated library findings; no advisory is automatically ignored.
+
 The [2026-10-26 v0.3.0 assessment](security/trivy-2026-10-26.md) records the initial
 findings and proposed remediation, with sanitized scan evidence.
 
@@ -185,9 +194,9 @@ is provenance, not a replacement for image digest verification.
 
 ```sh
 uv run --no-sync python scripts/release.py check
-uv run --no-sync ruff check src tests scripts/release.py
-uv run --no-sync ruff format --check src tests scripts/release.py
-uv run --no-sync mypy src
+uv run --no-sync ruff check src tests scripts/release.py scripts/check_runtime_security.py
+uv run --no-sync ruff format --check src tests scripts/release.py scripts/check_runtime_security.py
+uv run --no-sync mypy src scripts/check_runtime_security.py
 helm lint deploy/helm/mm-bot-manager
 uv run --no-sync pytest -q --cov=mm_bot_manager --cov-branch --cov-fail-under=85
 uv build --no-sources
