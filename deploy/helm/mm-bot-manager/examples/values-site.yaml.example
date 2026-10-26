@@ -10,6 +10,7 @@ mattermost:
   url: https://CHANGE_ME_MATTERMOST
   approvers: CHANGE_ME_APPROVER_USERNAME
   catalogViewers: CHANGE_ME_CATALOG_VIEWER_USERNAME
+  feedbackHandlers: "" # Set comma-separated support usernames to enable !feedback.
   defaultLanguage: ru
   verifySSL: true
   caBundle:

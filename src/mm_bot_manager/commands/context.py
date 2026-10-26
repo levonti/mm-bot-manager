@@ -22,6 +22,7 @@ class CommandContext:
     operation_repo: OperationRepo
     channel_type: str | None = None  # Unknown channels must never receive credentials.
     catalog_viewer_ids: frozenset[str] = frozenset()
+    feedback_handler_ids: frozenset[str] = frozenset()
     language: str = "en"
     default_language: str = "en"
     language_resolver: LanguageResolver | None = None

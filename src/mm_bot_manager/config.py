@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     # If empty, creation is immediate; imports and key attribute updates are disabled.
     mm_approvers: str = Field(default="")
     mm_catalog_viewers: str = Field(default="")
+    mm_feedback_handlers: str = Field(default="")
     mm_default_language: Literal["en", "ru"] = "en"
     mm_display_timezone: str = "UTC"
     max_workers: int = Field(default=4, ge=1, le=32)
@@ -71,6 +72,10 @@ class Settings(BaseSettings):
     @property
     def catalog_viewer_usernames(self) -> list[str]:
         return [u.strip() for u in self.mm_catalog_viewers.split(",") if u.strip()]
+
+    @property
+    def feedback_handler_usernames(self) -> list[str]:
+        return [u.strip() for u in self.mm_feedback_handlers.split(",") if u.strip()]
 
     @property
     def mm_rest_base(self) -> str:

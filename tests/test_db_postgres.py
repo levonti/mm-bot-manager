@@ -647,3 +647,97 @@ def test_postgres_only_one_update_proposal_across_connections(isolated_pg, pg_ds
 
     assert sorted(parallel_connections(pg_dsn, schema, submit)) == [False, True]
     assert conn.execute("SELECT COUNT(*) AS n FROM bot_update_request").fetchone()["n"] == 1
+
+
+async def test_feedback_postgres_lifecycle_and_persistent_outbox(isolated_pg):
+    from mm_bot_manager.feedback import FeedbackRepo
+    from mm_bot_manager.feedback_delivery import deliver_once
+    from tests.test_feedback import feedback_context
+
+    conn, _ = isolated_pg
+    ctx = feedback_context(conn)
+    repo = FeedbackRepo(conn)
+    steps = [
+        ("alice", '!feedback new Unclosed "quote\n--literal'),
+        ("support", "!feedback take FB-1"),
+        ("support", "!feedback set-status FB-1 waiting Details?"),
+        ("alice", "!feedback reply FB-1 More context"),
+        ("support", "!feedback set-status FB-1 resolved Fixed"),
+        ("alice", "!feedback reopen FB-1 Reproduced"),
+    ]
+    for index, (actor, text) in enumerate(steps):
+        result = await dispatch(
+            replace(ctx, caller_user_id=actor, caller_username=actor, post_id=f"feedback-{index}"),
+            text,
+        )
+        assert "FB-1" in result
+    assert repo.get(1).status == "new"
+    assert repo.get(1).assignee_id is None
+    assert repo.get(1).version == 6
+    init_schema(conn)
+    assert len(repo.history(1, 0, 100)) == 6
+    while repo.due():
+        await deliver_once(ctx)
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS n FROM feedback_outbox WHERE state = 'pending'"
+        ).fetchone()["n"]
+        == 0
+    )
+    assert ctx.bot_mm.posts
+
+
+def test_feedback_concurrent_assignment_has_one_winner(isolated_pg, pg_dsn):
+    from threading import Barrier
+
+    from mm_bot_manager.feedback import FeedbackRepo
+    from mm_bot_manager.i18n import UserFacingError
+    from tests.test_feedback import HANDLERS
+
+    conn, schema = isolated_pg
+    ticket = FeedbackRepo(conn).create("alice", "Issue", "source-new", HANDLERS)
+    barrier = Barrier(2)
+
+    def take(actor):
+        other = connect_postgres(pg_dsn)
+        try:
+            other.execute(f"SET search_path TO {schema}")
+            repo = FeedbackRepo(other)
+            snapshot = repo.get(ticket.number)
+            barrier.wait(timeout=10)
+            try:
+                repo.change(snapshot, "take", actor, "", "take-" + actor, HANDLERS)
+            except UserFacingError as exc:
+                assert exc.key == "feedback.conflict"
+                return False
+            return True
+        finally:
+            other.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(take, ["support", "backup"]))
+    assert sorted(results) == [False, True]
+    assert FeedbackRepo(conn).get(ticket.number).version == 2
+    assert len(FeedbackRepo(conn).history(ticket.number, 0, 100)) == 2
+
+
+def test_feedback_postgres_rollback_and_idempotent_replay(isolated_pg, monkeypatch):
+    from mm_bot_manager.feedback import FeedbackRepo
+    from tests.test_feedback import HANDLERS
+
+    conn, _ = isolated_pg
+    repo = FeedbackRepo(conn)
+    ticket = repo.create("alice", "Issue", "post-1", HANDLERS)
+    assert repo.create("alice", "Issue", "post-1", HANDLERS) == ticket
+    original = FeedbackRepo._record
+
+    def fail(self, *args):
+        original(self, *args)
+        raise RuntimeError("injected write failure")
+
+    monkeypatch.setattr(FeedbackRepo, "_record", fail)
+    with pytest.raises(RuntimeError):
+        repo.change(ticket, "reply", "alice", "Must roll back", "post-2", HANDLERS)
+    assert repo.get(ticket.number) == ticket
+    assert len(repo.history(ticket.number, 0, 100)) == 1
+    assert conn.execute("SELECT COUNT(*) AS n FROM feedback_outbox").fetchone()["n"] == 2

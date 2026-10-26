@@ -9,6 +9,7 @@ from . import (
     create_bot,
     delete_bot,
     deny,
+    feedback,
     import_bot,
     info,
     language,
@@ -55,6 +56,10 @@ async def dispatch(ctx: CommandContext, raw_text: str) -> str:
         return await help_cmd.handle(ctx, ParsedArgs(positional=[], flags={}))
     if not text.startswith("!"):
         return ctx.tr("__init__.all_commands_must_start_with_e_g")
+    # Whitespace includes newlines and tabs; split once and leave the free-text tail intact.
+    words = text.split(maxsplit=1)
+    if words[0] == "!feedback":
+        return await feedback.handle(ctx, words[1] if len(words) > 1 else "")
     raw_text = text[1:]
     if not raw_text.strip():
         return await help_cmd.handle(ctx, ParsedArgs(positional=[], flags={}))

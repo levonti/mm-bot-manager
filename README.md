@@ -85,8 +85,9 @@ Create a `.env` file (or export variables directly) and fill it in:
 | `MM_BOT_TOKEN`  | yes      | —                                 | Manager bot access token (WebSocket + posting)            |
 | `MM_APPROVERS`  | no       | empty                             | Comma-separated approver usernames; mandatory for imports and key attribute updates |
 | `MM_CATALOG_VIEWERS` | no | empty | Additional usernames with read-only global catalog access in DM |
+| `MM_FEEDBACK_HANDLERS` | no | empty | Comma-separated feedback handler usernames; nonempty enables `!feedback`, independently of other roles |
 | `MM_DEFAULT_LANGUAGE` | no | `en` | Fallback interface language: `en` or `ru` |
-| `MM_DISPLAY_TIMEZONE` | no | `UTC` | IANA timezone for dates in `!info`, e.g. `Europe/Moscow`; invalid names stop startup |
+| `MM_DISPLAY_TIMEZONE` | no | `UTC` | IANA timezone for dates in `!info` and feedback, e.g. `Europe/Moscow`; invalid names stop startup |
 | `MM_VERIFY_SSL` | no       | `true`                            | Set `false` for self-signed certificates                 |
 | `DB_PATH`       | no       | `/data/mm-bot-manager.sqlite3`    | SQLite fallback (lowest database precedence)             |
 | `DB_URL`        | no       | —                                 | PostgreSQL DSN (highest database precedence)             |
@@ -179,6 +180,91 @@ the manager does not persist image bytes. Changes are blocked while a bot update
 is being applied or needs review, or a creation/token operation is unfinished.
 A timeout or server error during a write can leave the outcome uncertain: check
 Mattermost before retrying. The manager does not automatically retry image changes.
+
+## Feedback tickets
+
+Configure `MM_FEEDBACK_HANDLERS=alice,bob` to enable feedback. For Helm, set
+`mattermost.feedbackHandlers: "alice,bob"`; Compose forwards `MM_FEEDBACK_HANDLERS`.
+Empty configuration disables all feedback commands and notification delivery without
+removing stored tickets. Usernames are resolved to immutable Mattermost user IDs at
+startup. An unknown username or the manager bot itself stops startup. Feedback handlers
+are independent of approvers and catalog readers; those roles alone grant no ticket access.
+Configuration changes require a restart.
+
+All commands run **only in a direct message to the manager bot**. No new inbound HTTP
+endpoint, slash-command integration, buttons, or forms are required. Commands arrive over
+the existing WebSocket and the bot sends ordinary posts through its existing REST client.
+
+| User command | Behavior |
+| --- | --- |
+| `!feedback` or `!feedback help` | Show commands available to your role |
+| `!feedback new <text>` | Create a ticket and receive its `FB-<number>` reference |
+| `!feedback list [page]` | List only your tickets, newest first, 10 per page |
+| `!feedback status FB-104` | Current status, author, handler, update time and latest event |
+| `!feedback show FB-104 [page]` | Shared history, oldest first, one event per page |
+| `!feedback reply FB-104 <text>` | Add a message to an open ticket |
+| `!feedback close FB-104 <reason>` | Close your ticket, including a resolved one |
+| `!feedback reopen FB-104 <reason>` | Reopen a resolved/closed ticket and clear assignment |
+
+| Feedback handler command | Behavior |
+| --- | --- |
+| `!feedback queue [page]` | Open tickets, unassigned first, oldest first within each group |
+| `!feedback take FB-104` | Assign an unassigned open ticket to yourself |
+| `!feedback reply FB-104 <text>` | Reply to any accessible open ticket |
+| `!feedback set-status FB-104 waiting <question>` | Assigned handler requests information |
+| `!feedback set-status FB-104 resolved <solution>` | Assigned handler records a solution |
+| `!feedback close FB-104 <reason>` | Close any accessible ticket |
+| `!feedback reopen FB-104 <reason>` | Reopen any resolved/closed ticket |
+
+Example conversation (each line is a separate DM command):
+
+```text
+!feedback new I did not receive an update notification
+!feedback take FB-104
+!feedback set-status FB-104 waiting Was this a rename or a description change?
+!feedback reply FB-104 A description change
+!feedback set-status FB-104 resolved The notification was fixed
+```
+
+Tickets start as `new`. Taking one sets `in_progress`; an author's reply in `waiting`
+returns it to `in_progress`. Replies do not reopen `resolved` or `closed` tickets:
+use `reopen`, which returns to `new` and clears the handler. Reasons/questions/solutions
+are mandatory. There is no automatic closure or internal-note mode: every message is
+visible to the author and all feedback handlers. Handlers can view tickets through the
+same `status` and `show` commands. If an assigned handler is removed from configuration,
+a current handler can take over the ticket with `take`. Simultaneous assignments allow
+only one winner.
+
+Text accepts 1–3000 characters, including quotes, newlines and literal `--` words;
+there are no body flags to quote or escape. Attachments are rejected. Replies must
+include the ticket reference: ordinary DM text and Mattermost thread replies are not
+automatically attached to a ticket. Use `!feedback reply FB-104 <text>` in either case.
+Names are display snapshots; authorization always uses immutable user IDs. Output
+neutralizes user-provided Markdown and mentions and uses the recipient's RU/EN language
+and `MM_DISPLAY_TIMEZONE`. Cross-user ticket IDs and nonexistent IDs return the same error.
+
+The author receives handler replies and status changes. The assigned handler receives
+author replies; new/reopened tickets notify all handlers. Messages on an unassigned ticket
+also notify all handlers. The actor is not notified about their own command, which already
+receives a confirmation. Removed handlers are excluded from pending deliveries at startup.
+
+Startup adds `feedback_ticket`, `feedback_event` and `feedback_outbox` transactionally
+on SQLite and PostgreSQL (schema migration 2). Back up and retain all three tables.
+Each mutation, history event and notification enqueue commits together. Source post IDs
+prevent duplicate effects. A single background task under the existing instance lock
+sends queued DMs independently of WebSocket reconnections. Failed sends retry with
+exponential backoff from 5 seconds to one hour; retry state survives restarts. Delivery
+preserves event order per ticket/recipient. Disabling feedback pauses queued delivery;
+re-enabling it resumes delivery to currently authorized recipients.
+
+Delivery is **at least once**: a crash after a successful post but before recording delivery
+may cause a duplicate DM with the same ticket/event number. A failed command confirmation
+does not roll back an already stored ticket; check `list`/`show` before resubmitting.
+Incoming WebSocket events missed while disconnected are not backfilled. The MVP has no
+attachments, ratings, operation references, automatic external issue creation, deletion,
+or retention scheduler. Feedback text remains in the database/backups and Mattermost DM
+history; it is not written to technical application logs. Do not include tokens or passwords;
+commands, credentials and other conversation history are never attached automatically.
 
 ## Importing existing bots
 

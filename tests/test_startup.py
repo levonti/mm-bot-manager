@@ -208,7 +208,9 @@ async def test_startup_automatically_upgrades_previous_release_before_events(tmp
     conn.execute("UPDATE bot SET created_at = '2026-10-22T11:35:08+00:00'")
 
     async def stream(*args, **kwargs):
-        assert conn.execute("SELECT version FROM schema_migration").fetchone()[0] == 1
+        assert [
+            row[0] for row in conn.execute("SELECT version FROM schema_migration ORDER BY version")
+        ] == [1, 2]
         assert BotRepo(conn).get(BOT).revision == 0
         assert PendingRequestRepo(conn).get("old-pending").status == "pending"
         assert TokenRepo(conn).get("keep-token").revoked_at is None
@@ -233,5 +235,65 @@ async def test_startup_automatically_upgrades_previous_release_before_events(tmp
         await app.serve(cfg, conn)
         body = json.loads(post.calls.last.request.content)["message"]
         assert "22.10.2026 14:35:08 (UTC+03:00)" in body
+    finally:
+        conn.close()
+
+
+@respx.mock
+async def test_feedback_configuration_resolves_handlers_and_runs_delivery(tmp_path, monkeypatch):
+    import asyncio
+
+    from mm_bot_manager.commands import dispatch
+
+    cfg = settings(tmp_path, mm_feedback_handlers="support")
+    cfg.health_port = 0
+    conn = connect(cfg.db_path)
+    respx.get("https://mm.example/api/v4/users/me").mock(
+        return_value=httpx.Response(200, json={"id": "mgr", "username": "manager"})
+    )
+    lookup = respx.get("https://mm.example/api/v4/users/username/support").mock(
+        return_value=httpx.Response(200, json={"id": "support-id", "username": "support"})
+    )
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def delivery(ctx):
+        assert ctx.feedback_handler_ids == frozenset({"support-id"})
+        result = await dispatch(ctx, "!feedback new Outside DM")
+        assert "direct message" in result
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def stream(*args, **kwargs):
+        await asyncio.wait_for(started.wait(), timeout=2)
+        if False:
+            yield {}
+
+    monkeypatch.setattr(app, "run_delivery", delivery)
+    monkeypatch.setattr(app, "stream_events", stream)
+    try:
+        await app.serve(cfg, conn)
+        assert lookup.called
+        assert cancelled.is_set()
+    finally:
+        conn.close()
+
+
+@respx.mock
+async def test_feedback_handler_resolution_fails_closed(tmp_path):
+    cfg = settings(tmp_path, mm_feedback_handlers="missing")
+    conn = connect(cfg.db_path)
+    respx.get("https://mm.example/api/v4/users/me").mock(
+        return_value=httpx.Response(200, json={"id": "mgr", "username": "manager"})
+    )
+    respx.get("https://mm.example/api/v4/users/username/missing").mock(
+        return_value=httpx.Response(404, json={"message": "private detail"})
+    )
+    try:
+        with pytest.raises(SystemExit, match="MM_FEEDBACK_HANDLERS"):
+            await app.serve(cfg, conn)
     finally:
         conn.close()

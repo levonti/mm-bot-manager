@@ -1,6 +1,6 @@
 [project]
 name = "mm-bot-manager"
-version = "0.2.0"
+version = "0.3.0"
 description = "Mattermost bot that lets users manage their own bot accounts via chat."
 authors = [
     { name = "levonti", email = "leo@badbox.net" }

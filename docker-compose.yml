@@ -1,6 +1,7 @@
 services:
   mm-bot-manager:
     build: .
+    image: ${MM_BOT_MANAGER_IMAGE:-mm-bot-manager:local}
     restart: unless-stopped
     stop_grace_period: ${STOP_GRACE_PERIOD:-65s}
     depends_on:
@@ -12,6 +13,7 @@ services:
       MM_BOT_TOKEN: ${MM_BOT_TOKEN}
       MM_APPROVERS: ${MM_APPROVERS:-}
       MM_CATALOG_VIEWERS: ${MM_CATALOG_VIEWERS:-}
+      MM_FEEDBACK_HANDLERS: ${MM_FEEDBACK_HANDLERS:-}
       MM_DEFAULT_LANGUAGE: ${MM_DEFAULT_LANGUAGE:-en}
       MM_DISPLAY_TIMEZONE: ${MM_DISPLAY_TIMEZONE:-UTC}
       MM_VERIFY_SSL: ${MM_VERIFY_SSL:-true}

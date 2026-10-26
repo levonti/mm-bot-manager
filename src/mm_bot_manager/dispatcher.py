@@ -128,6 +128,7 @@ class CommandContextFactory:
         catalog_viewer_ids: frozenset[str] = frozenset(),
         default_language: str = "en",
         display_timezone: str = "UTC",
+        feedback_handler_ids: frozenset[str] = frozenset(),
     ) -> None:
         self._bot_repo = bot_repo
         self._token_repo = token_repo
@@ -137,6 +138,7 @@ class CommandContextFactory:
         self._manager_user_id = manager_user_id
         self._approver_ids = approver_ids
         self._catalog_viewer_ids = catalog_viewer_ids
+        self._feedback_handler_ids = feedback_handler_ids
         self.language_resolver = LanguageResolver(bot_repo.conn, admin_mm, default_language)
         self.default_language = default_language
         self.display_timezone = display_timezone
@@ -165,6 +167,7 @@ class CommandContextFactory:
             operation_repo=self.operation_repo,
             channel_type=channel_type,
             catalog_viewer_ids=self._catalog_viewer_ids,
+            feedback_handler_ids=self._feedback_handler_ids,
             language=self.default_language,
             default_language=self.default_language,
             language_resolver=self.language_resolver,
