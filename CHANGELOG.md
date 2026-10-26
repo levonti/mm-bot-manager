@@ -8,7 +8,7 @@
 
 - Explicit SemVer release preparation and CI consistency checks.
 - Version reporting through CLI, chat and startup logs.
-- Tag pipelines for Python, Helm and container artifacts and GitLab Releases.
+- Tag pipelines for Python, Helm and Docker Hub container artifacts and GitLab Releases.
 
 ## [0.1.0] - 2026-10-26
 

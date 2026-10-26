@@ -77,7 +77,9 @@ the full verification job on the tagged SHA before building:
 
 - A Python wheel and source distribution, built using the existing `uv_build`
   backend, plus a Helm archive and checksums.
-- A Linux amd64 image tagged with the version and `sha-<full commit SHA>`. The
+- A Linux amd64 Docker Hub image tagged with the version, `v<version>` and
+  `sha-<full commit SHA>`. The default repository is `levonti17/mm-bot-manager`;
+  `latest` is not updated by this pipeline. The
   image includes OCI version/revision labels and `MM_BUILD_REVISION`.
 - A GitLab Release with the changelog section, exact commit, container digest and
   an archive download link. The package artifact has no expiration configured.
@@ -92,7 +94,12 @@ The image job uses Docker 27.5.1 with TLS-enabled Docker-in-Docker. Before publi
 - Configure a suitable Docker runner with privileged DinD and a shared
   `/certs/client` volume; route the image job with runner tags if required by the
   installation. An online runner alone does not prove these settings are present.
-- Enable the project container registry and allow CI job credentials to push.
+- Configure GitLab CI/CD variables `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
+  (a Docker Hub PAT with Read/Write permissions). Mark both Protected and the
+  token Masked/Hidden. Do not put credentials in files or pass them in command
+  arguments. Set `DOCKERHUB_IMAGE=levonti17/mm-bot-manager` (also the YAML default).
+  The image job authenticates through `docker login --password-stdin`; the
+  integrated GitLab Container Registry is not required.
 - For an internal GitLab CA, configure the runner to provide
   `CI_SERVER_TLS_CA_FILE`. Verification fetches use this CA file without disabling
   TLS certificate checks; public CAs use the system trust bundle.
@@ -100,7 +107,7 @@ The image job uses Docker 27.5.1 with TLS-enabled Docker-in-Docker. Before publi
   The release job uses GitLab's rolling official CLI image; pin an approved
   version/digest if the installation requires fully pinned tooling.
 - Protect `v*` Git tags, restrict who can publish, and configure immutable version
-  tags in the registry. Existing repository settings are not changed by this work.
+  tags in Docker Hub when available for the repository. Existing repository settings are not changed by this work.
 - Retain release artifacts and registry images in cleanup policies. The download
   link relies on the package job's artifacts; deleting that job/pipeline removes
   those assets despite `expire_in: never`.
