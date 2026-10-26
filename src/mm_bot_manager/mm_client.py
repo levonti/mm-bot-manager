@@ -1,14 +1,22 @@
+from time import monotonic
 from types import TracebackType
 from typing import Any, Self
+from uuid import uuid4
 
 import httpx
 
+from .api_diagnostics import response_fields, route_template
+from .logging import get_logger
+
 
 class MattermostError(RuntimeError):
-    def __init__(self, status: int, message: str, payload: Any = None) -> None:
+    def __init__(
+        self, status: int, message: str, payload: Any = None, *, diagnostic_id: str | None = None
+    ) -> None:
         super().__init__(f"Mattermost API error {status}: {message}")
         self.status = status
         self.payload = payload
+        self.diagnostic_id = diagnostic_id
 
 
 class MattermostClient:
@@ -43,15 +51,31 @@ class MattermostClient:
         *,
         json: Any | None = None,
     ) -> Any:
+        started = monotonic()
         response = await self._client.request(method, path, json=json)
         if response.status_code >= 400:
             try:
                 payload = response.json()
-                message = payload.get("message", response.text)
             except ValueError:
                 payload = None
-                message = response.text
-            raise MattermostError(response.status_code, message, payload)
+            message = payload.get("message") if isinstance(payload, dict) else None
+            if not isinstance(message, str):
+                message = "Unexpected error response"
+            diagnostic_id = uuid4().hex
+            log = get_logger(__name__, stderr=True)
+            write_log = log.error if response.status_code >= 500 else log.warning
+            write_log(
+                "mattermost_api_error",
+                diagnostic_id=diagnostic_id,
+                method=method if method in {"GET", "POST", "PUT", "PATCH", "DELETE"} else "unknown",
+                route=route_template(path),
+                status=response.status_code,
+                elapsed_ms=round((monotonic() - started) * 1000, 2),
+                **response_fields(payload, response.headers.get("X-Request-ID")),
+            )
+            raise MattermostError(
+                response.status_code, message, payload, diagnostic_id=diagnostic_id
+            )
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
