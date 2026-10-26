@@ -23,9 +23,10 @@ ENV MM_BUILD_REVISION=$MM_BUILD_REVISION
 LABEL org.opencontainers.image.version=$APP_VERSION \
       org.opencontainers.image.revision=$MM_BUILD_REVISION
 
-# libpq is required by psycopg[binary] at runtime
+# OS runtime packages; psycopg[binary] supplies its own libpq.
 RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tzdata \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall --yes pip
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \

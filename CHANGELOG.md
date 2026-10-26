@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Security
+
+- Update vulnerable AnyIO, certifi, idna, pydantic-settings and development
+  urllib3 dependencies, with minimum secure versions enforced by the resolver.
+- Remove pip and its vendored dependencies from the final runtime image.
+
 ### Added
 
 - Trivy dependency scans in every pipeline and release-image scans by digest before

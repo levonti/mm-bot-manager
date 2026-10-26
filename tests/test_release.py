@@ -131,13 +131,18 @@ async def test_chat_version():
     assert "Usage" in await handler(None, ParsedArgs(["extra"], {}))
 
 
-def test_release_jobs_are_gated_and_publish_waits_for_both_builds():
+def test_release_jobs_are_gated_and_publish_waits_for_builds_and_scan():
     config = yaml.safe_load((ROOT / ".gitlab-ci.yml").read_text())
     assert config["verify"]["rules"] == [{"when": "on_success"}]
-    assert config["stages"] == ["verify", "package", "release"]
+    assert config["stages"] == ["verify", "package", "security", "release"]
     assert {need["job"] for need in config["publish-release"]["needs"]} == {
         "package-release",
         "build-release-image",
+        "scan-release-image",
     }
     for name in ("package-release", "build-release-image", "publish-release"):
         assert config[name]["extends"] == ".release-tag"
+    scan = config["scan-release-image"]
+    assert ".release-tag" in scan["extends"]
+    assert scan["stage"] == "security"
+    assert scan["needs"] == [{"job": "build-release-image", "artifacts": True}]
