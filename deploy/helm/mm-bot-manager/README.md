@@ -244,7 +244,11 @@ Review the context, profile, database mode and effective StorageClasses, then:
 
 Both commands reload the saved configuration, including in a new terminal. There
 is no second profile assignment. `apply` repeats site validation and the
-server-side dry run, stopping on any failure before installation. It uses the
+Helm preview (`upgrade --install --dry-run=server --hide-secret`), stopping on any
+failure before installation. The preview reads release/cluster state but does not
+perform actual upgrade PATCHes or establish admission-policy acceptance. It avoids
+client-side kubectl apply against Helm-owned resources and suppresses rendered
+manifest output. It uses the
 Helm-version-appropriate rollback flag and waits for Jobs. For an upgrade, edit
 the existing overlay, take a verified backup, then repeat these two commands.
 The helper belongs to the source checkout; a standalone packaged chart does not

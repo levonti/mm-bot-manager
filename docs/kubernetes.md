@@ -836,12 +836,12 @@ wrong, edit the saved files in section 1 and repeat `check`.
 ```
 
 `apply` repeats all checks before Helm changes anything. Both commands require
-that the active kube-context matches the saved context; the server-side dry run
+that the active kube-context matches the saved context; the Helm preview
 and installation also explicitly target that context. The namespace and release
 are `mm-bot-manager`, as in the remaining commands in this runbook.
 
 The helper runs with `set -euo pipefail`: missing/unconfigured files, unsupported
-Helm, failed site validation, failed rendering or failed server-side dry run
+Helm, failed site validation, failed rendering or failed Helm preview
 stop the operation **before installation**. It always uses profile first, then
 site overlay, with Helm 3 `--atomic` or Helm 4 `--rollback-on-failure`, plus
 `--wait --wait-for-jobs --timeout=10m`. The site validator
@@ -860,8 +860,26 @@ does not download schemas or ignore missing ones. Without the ESO schema directo
 it explicitly reports that optional CRD schema validation was skipped; normal Helm
 render/schema tests still cover ESO. Rendering with Kubernetes 1.21.1 here checks
 manifest shape, not operator runtime compatibility with that Kubernetes release.
-The server-side dry run also checks the destination cluster's admission policies
-and creates no persistent objects. The explicit timeout allows initial storage
+The helper uses `helm upgrade --install --dry-run=server --hide-secret` with the
+same context, namespace, chart and values as the real upgrade. It reads the release
+state and cluster capabilities, performs Helm rendering/OpenAPI checks, and creates
+no persistent objects. It does **not** execute the actual upgrade PATCHes or prove
+that all admission policies and immutable-field transitions will pass; those checks
+occur during the real upgrade. Preview stdout is private temporary output and is
+removed on exit, rather than printing rendered values/manifests to operator logs.
+The helper requires Helm's `--dry-run=server` and `--hide-secret` options (tested
+with Helm 3.17.3 and 4.1.4).
+
+Do not run `kubectl apply` against the rendered Helm-managed workloads as a
+preflight. Without `last-applied-configuration`, client-side apply can retain an
+old environment `value` while adding `valueFrom`, causing a false preflight failure:
+`may not be specified when value is not empty`. That check stops before the actual
+Helm upgrade. Do not delete the Deployment or add last-applied annotations to
+work around it. Use the helper's Helm preview; a similar error from the **real**
+Helm upgrade requires inspecting the affected env key and installed release/live
+configuration separately, without printing token/password values.
+
+The explicit timeout allows initial storage
 provisioning more time than Helm's default five minutes. See the
 [PVC-check implementation notes](#appendix-pvc-check-and-upgrade-implementation-notes)
 for the reasons behind the wait flags and Job lifecycle.
@@ -1123,7 +1141,7 @@ Jobs and simulate API failures, terminating Pods, locks and previous suspend/rep
 states. Deployment workflow tests run the documented commands with real Helm
 rendering and a fake cluster. They check all four saved profiles, reuse in a new
 shell, site overrides, non-overwriting preparation, context mismatch and stopping
-before installation after validation/render/dry-run failures. They also exercise
+before installation after validation/render/Helm-preview failures. They also exercise
 legacy files, duplicate selections, ignored/untracked paths, source archives and
 Git staging/Helm packaging exclusions for generated artifacts.
 PVC-check tests execute its rendered shell script against disposable local
