@@ -232,6 +232,69 @@ def init_schema(conn: DbConn) -> None:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
             _require_metadata(conn, table)
         _migrate_updates(conn)
+        _migrate_feedback(conn)
+
+
+def _migrate_feedback(conn: DbConn) -> None:
+    number = "INTEGER PRIMARY KEY" if conn.dialect == "sqlite" else "BIGSERIAL PRIMARY KEY"
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS feedback_ticket (
+            number {number},
+            ticket_id TEXT NOT NULL UNIQUE,
+            author_id TEXT NOT NULL,
+            author_name TEXT NOT NULL,
+            assignee_id TEXT,
+            assignee_name TEXT,
+            status TEXT NOT NULL CHECK (status IN
+                ('new', 'in_progress', 'waiting', 'resolved', 'closed')),
+            version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS feedback_event (
+            event_id TEXT PRIMARY KEY,
+            ticket_number BIGINT NOT NULL REFERENCES feedback_ticket(number),
+            version INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN
+                ('new', 'reply', 'take', 'set-status', 'close', 'reopen')),
+            actor_id TEXT NOT NULL,
+            actor_name TEXT NOT NULL,
+            body TEXT NOT NULL,
+            status TEXT NOT NULL,
+            assignee_id TEXT,
+            source_post_id TEXT UNIQUE,
+            created_at TEXT NOT NULL,
+            UNIQUE (ticket_number, version)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS feedback_outbox (
+            outbox_id TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL REFERENCES feedback_event(event_id),
+            recipient_id TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'sent', 'skipped')),
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TEXT NOT NULL,
+            UNIQUE (event_id, recipient_id)
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feedback_author ON feedback_ticket(author_id, number)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback_ticket(status, number)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feedback_delivery "
+        "ON feedback_outbox(state, next_attempt_at)"
+    )
+    conn.execute(
+        "INSERT INTO schema_migration (version, applied_at) VALUES (2, ?) "
+        "ON CONFLICT (version) DO NOTHING",
+        (datetime.now(UTC).isoformat(),),
+    )
 
 
 def _migrate_updates(conn: DbConn) -> None:

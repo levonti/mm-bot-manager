@@ -60,6 +60,11 @@ spec:
                 configMapKeyRef:
                   name: {{ include "mm-bot-manager.fullname" . }}
                   key: MM_APPROVERS
+            - name: MM_FEEDBACK_HANDLERS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mm-bot-manager.fullname" . }}
+                  key: MM_FEEDBACK_HANDLERS
             - name: MM_CATALOG_VIEWERS
               valueFrom:
                 configMapKeyRef:

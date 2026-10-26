@@ -5,6 +5,7 @@ import signal
 from .config import Settings, load_settings
 from .db import DbConn, connect, connect_postgres, init_schema
 from .dispatcher import CommandContextFactory, MessageRouter
+from .feedback_delivery import run_delivery
 from .health import start_health_server
 from .i18n import tr, validate_catalogs
 from .logging import configure_logging, get_logger
@@ -70,6 +71,14 @@ async def serve(settings: Settings, conn: DbConn) -> None:
             "MM_CATALOG_VIEWERS",
             language=settings.mm_default_language,
         )
+        feedback_ids = await _resolve_approvers(
+            admin_mm,
+            settings.feedback_handler_usernames,
+            "MM_FEEDBACK_HANDLERS",
+            language=settings.mm_default_language,
+        )
+        if manager_user_id in feedback_ids:
+            raise SystemExit("MM_FEEDBACK_HANDLERS must not contain the manager bot")
         log.info("logged_in", user_id=manager_user_id, approver_count=len(approver_ids))
         router = MessageRouter(manager_user_id, manager_username)
         factory = CommandContextFactory(
@@ -81,6 +90,7 @@ async def serve(settings: Settings, conn: DbConn) -> None:
             manager_user_id=manager_user_id,
             approver_ids=approver_ids,
             catalog_viewer_ids=catalog_ids,
+            feedback_handler_ids=feedback_ids,
             default_language=settings.mm_default_language,
             display_timezone=settings.mm_display_timezone,
         )
@@ -93,6 +103,7 @@ async def serve(settings: Settings, conn: DbConn) -> None:
             "startup_recovery", unresolved_operations=unresolved, interrupted_posts=interrupted
         )
         health_handlers: set[asyncio.Task[None]] = set()
+        delivery = asyncio.create_task(run_delivery(recovery_ctx)) if feedback_ids else None
         try:
             server = await start_health_server(
                 conn,
@@ -119,6 +130,9 @@ async def serve(settings: Settings, conn: DbConn) -> None:
                     drain_timeout=settings.shutdown_timeout,
                 )
         finally:
+            if delivery is not None:
+                delivery.cancel()
+                await asyncio.gather(delivery, return_exceptions=True)
             handlers = tuple(health_handlers)
             for handler in handlers:
                 handler.cancel()

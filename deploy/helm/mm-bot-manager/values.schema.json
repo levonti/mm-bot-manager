@@ -52,6 +52,7 @@
         "url": { "type": "string", "format": "uri", "minLength": 1 },
         "approvers": { "type": "string" },
         "catalogViewers": { "type": "string" },
+        "feedbackHandlers": { "type": "string" },
         "defaultLanguage": { "enum": ["en", "ru"] },
         "displayTimezone": { "type": "string", "minLength": 1 },
         "verifySSL": { "type": "boolean" },

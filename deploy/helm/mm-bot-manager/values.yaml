@@ -14,6 +14,7 @@ mattermost:
   url: https://mm.example.com
   approvers: ""
   catalogViewers: ""
+  feedbackHandlers: ""
   defaultLanguage: en
   displayTimezone: UTC
   verifySSL: true

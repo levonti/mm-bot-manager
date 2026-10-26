@@ -573,7 +573,10 @@ def assert_upgrade_preserves_data(conn):
         if table == "bot":
             assert after[0].pop("revision") == 0
         assert after == before[table]
-    assert conn.execute("SELECT COUNT(*) AS n FROM schema_migration").fetchone()["n"] == 1
+    assert [
+        row["version"]
+        for row in conn.execute("SELECT version FROM schema_migration ORDER BY version")
+    ] == [1, 2]
     ctx = import_context(conn, UpdateMM())
     assert ctx.bot_repo.get(BOT).revision == 0
     return ctx

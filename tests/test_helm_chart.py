@@ -584,3 +584,17 @@ def test_display_timezone_reaches_application() -> None:
     assert (
         env["MM_DISPLAY_TIMEZONE"]["valueFrom"]["configMapKeyRef"]["key"] == "MM_DISPLAY_TIMEZONE"
     )
+
+
+def test_feedback_handlers_are_passed_from_values_to_application():
+    resources = render("values-external.yaml", "--set", "mattermost.feedbackHandlers=support")
+    config = by_kind(resources, "ConfigMap")[0]
+    assert config["data"]["MM_FEEDBACK_HANDLERS"] == "support"
+    deployment = by_kind(resources, "Deployment")[0]
+    env = {
+        item["name"]: item
+        for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    assert (
+        env["MM_FEEDBACK_HANDLERS"]["valueFrom"]["configMapKeyRef"]["key"] == "MM_FEEDBACK_HANDLERS"
+    )
