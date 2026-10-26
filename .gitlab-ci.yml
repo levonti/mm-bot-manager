@@ -11,12 +11,14 @@ workflow:
 stages:
   - verify
   - package
+  - security
   - release
 
 variables:
   GIT_DEPTH: "0"
   DOCKERHUB_IMAGE: levonti17/mm-bot-manager
   HELM_VERSION: v3.17.3
+  TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivy-cache"
   UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
   POSTGRES_DB: mm_bot_manager_test
   POSTGRES_USER: mm_bot_test
@@ -77,6 +79,34 @@ verify:
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
+
+# Keep full reports, including findings without an upstream fix. Only fixable
+# HIGH/CRITICAL findings block the pipeline; scanner/network errors also fail.
+.trivy:
+  image:
+    name: aquasec/trivy:0.76.1
+    entrypoint: [""]
+  cache:
+    key: trivy-0.76.1
+    paths:
+      - .trivy-cache/
+  variables:
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_TIMEOUT: 15m
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - trivy-*.json
+      - trivy-*.txt
+
+scan-dependencies:
+  extends: .trivy
+  stage: verify
+  script:
+    - trivy fs --scanners vuln --include-dev-deps --skip-dirs .venv --skip-dirs .uv-cache --skip-dirs .trivy-cache --skip-dirs .worktrees --format json --output trivy-dependencies.json .
+    - trivy convert --scanners vuln --format table --output trivy-dependencies.txt trivy-dependencies.json
+    - trivy fs --scanners vuln --include-dev-deps --skip-dirs .venv --skip-dirs .uv-cache --skip-dirs .trivy-cache --skip-dirs .worktrees --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 .
 
 # Stable release tags only; malformed tags are still rejected by verify.
 .release-tag:
@@ -168,6 +198,20 @@ build-release-image:
     reports:
       dotenv: image.env
 
+scan-release-image:
+  extends:
+    - .trivy
+    - .release-tag
+  stage: security
+  needs:
+    - job: build-release-image
+      artifacts: true
+  script:
+    - test -n "$RELEASE_IMAGE"
+    - trivy image --image-src remote --platform linux/amd64 --scanners vuln --format json --output trivy-image.json "$RELEASE_IMAGE"
+    - trivy convert --scanners vuln --format table --output trivy-image.txt trivy-image.json
+    - trivy image --image-src remote --platform linux/amd64 --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$RELEASE_IMAGE"
+
 publish-release:
   extends: .release-tag
   stage: release
@@ -177,6 +221,8 @@ publish-release:
       artifacts: true
     - job: build-release-image
       artifacts: true
+    - job: scan-release-image
+      artifacts: false
   script:
     - test -n "$RELEASE_IMAGE"
     - printf '\nCommit `%s`\n\nContainer `%s`\n' "$CI_COMMIT_SHA" "$RELEASE_IMAGE" >> release-notes.md

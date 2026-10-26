@@ -674,6 +674,13 @@ GitLab CI runs lint, formatting, strict typing and the complete test suite with 
 PostgreSQL 15 service. The job requires at least **85% statement/branch coverage** and publishes
 JUnit and coverage reports. No checks are allowed to fail silently.
 
+Trivy 0.76.1 scans lockfile dependencies on branch, merge request and tag pipelines.
+Stable releases also scan the published Linux amd64 image by its exact digest
+before creating the GitLab Release. Fixable HIGH/CRITICAL vulnerabilities and
+scanner errors fail the pipeline. Full JSON and text reports, including lower
+severities and findings without a fix, are retained as job artifacts for 30 days.
+See the [release guide](docs/releases.md#vulnerability-scanning) for details.
+
 Locally, PostgreSQL tests use testcontainers and Docker. CI supplies `MM_TEST_POSTGRES_DSN`
 for its disposable service instead; this variable is only for a dedicated test database.
 The repository does not change GitLab branch-protection or merge settings.

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Trivy dependency scans in every pipeline and release-image scans by digest before
+  GitLab Release creation, with full reports and a gate for fixable HIGH/CRITICAL CVEs.
+
 ## [0.3.0] - 2026-10-26
 
 ### Added
