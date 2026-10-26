@@ -123,6 +123,18 @@ preserving its digest, and follow the Kubernetes runbook using `image.digest`.
 Multi-architecture images remain a separate build concern; the release pipeline
 currently produces Linux amd64 only.
 
+## Docker Compose upgrades
+
+Set `MM_BOT_MANAGER_IMAGE=levonti17/mm-bot-manager@sha256:<release-digest>` in the
+existing ignored `.env` file. Keep credentials, handlers and database settings in
+place. Pull the exact image before stopping the manager, retain the current image
+and configuration, and take a verified database backup while the application is
+stopped. Recreate only the application with
+`docker compose up -d --no-deps --no-build --pull never mm-bot-manager`; do not
+recreate PostgreSQL or remove its volume. Confirm health, schema version, feedback
+configuration and build revision after startup. Keep the previous image for an
+application rollback; do not restore an older database over newer writes.
+
 ## Runtime diagnostics
 
 `mm-bot-manager --version` and `python -m mm_bot_manager --version` work without

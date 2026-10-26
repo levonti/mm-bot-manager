@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-26
+
+### Added
+
+- Direct-message feedback tickets with author/handler access checks, assignment,
+  state transitions, history and durable delivery of notifications.
+- Optional `MM_FEEDBACK_HANDLERS` configuration for Compose and Helm.
+- Compose release image pinning through `MM_BOT_MANAGER_IMAGE`.
+
+### Upgrade notes
+
+- Database migration 2 adds feedback tables and indexes on SQLite and PostgreSQL.
+  Stop the previous manager before upgrading and retain a verified backup.
+- Existing bot, request, token and preference data is preserved. Keep feedback
+  tables and records intact during an application rollback; database downgrades
+  and restoration over newer writes require a separate recovery procedure.
+- Configure active human Mattermost users as handlers to enable feedback delivery.
+
+
 ### Added
 
 - DM-only feedback tickets with creation, status/history, shared replies, handler queues,

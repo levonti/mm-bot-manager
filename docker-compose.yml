@@ -1,6 +1,7 @@
 services:
   mm-bot-manager:
     build: .
+    image: ${MM_BOT_MANAGER_IMAGE:-mm-bot-manager:local}
     restart: unless-stopped
     stop_grace_period: ${STOP_GRACE_PERIOD:-65s}
     depends_on:
