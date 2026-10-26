@@ -16,6 +16,14 @@ from tests.test_helm_chart import CHART, HELM, ROOT
 LOCAL = Path(".local/kubernetes")
 
 
+def is_install(event):
+    return (
+        event[0] == "helm"
+        and event[1:3] == ["upgrade", "--install"]
+        and "--dry-run=server" not in event
+    )
+
+
 @pytest.fixture()
 def deployment(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
@@ -46,11 +54,10 @@ if name == 'kubectl':
     if a == ['config', 'current-context']:
         print(os.environ.get('DEPLOY_TEST_CONTEXT', 'test-cluster'))
     else:
-        assert '--dry-run=server' in a, 'Unexpected cluster mutation: ' + repr(a)
-        assert a[a.index('--context') + 1] == 'test-cluster'
-        assert a[a.index('-n') + 1] == 'mm-bot-manager'
-        sys.stdin.read()
-        if failure == 'dry-run': raise SystemExit(1)
+        if os.environ.get('DEPLOY_TEST_LEGACY_ENV') and 'apply' in a:
+            print('env[6].valueFrom: may not be specified when value is not empty', file=sys.stderr)
+            raise SystemExit(1)
+        raise AssertionError('Unexpected kubectl mutation/patch, even in dry run: ' + repr(a))
 elif a[0] == 'version':
     if failure == 'version':
         print('v3.17.4')  # Usable stdout must not mask the failed command.
@@ -58,6 +65,14 @@ elif a[0] == 'version':
     print(os.environ.get('DEPLOY_TEST_VERSION', 'v3.17.4'))
 elif a[:2] == ['upgrade', '--install']:
     assert a[a.index('--kube-context') + 1] == 'test-cluster'
+    assert a[a.index('--namespace') + 1] == 'mm-bot-manager'
+    if '--dry-run=server' in a:
+        assert '--hide-secret' in a
+        assert not {'--atomic', '--rollback-on-failure', '--wait', '--wait-for-jobs'} & set(a)
+        print('PREVIEW_PAYLOAD_MUST_STAY_PRIVATE')
+        if failure in {'dry-run', 'render'}:
+            print('simulated Helm preview failure', file=sys.stderr)
+            raise SystemExit(1)
 else:
     if failure == 'lint' and a[0] == 'lint': raise SystemExit(1)
     if a[0] == 'template':
@@ -198,7 +213,7 @@ def test_check_then_apply_in_new_shells_preserve_the_saved_profile(
     config_before = (workspace / LOCAL / "deployment.env").read_bytes()
     checked = run("check")
     assert checked.returncode == 0, checked.stderr
-    assert not any(event[1:3] == ["upgrade", "--install"] for event in events())
+    assert not any(is_install(event) for event in events())
     applied = run("apply")
     assert applied.returncode == 0, applied.stderr
     assert f'database-mode: "{mode}"' in applied.stdout
@@ -215,7 +230,7 @@ def test_check_then_apply_in_new_shells_preserve_the_saved_profile(
                 f"deploy/helm/mm-bot-manager/examples/{profile}",
                 ".local/kubernetes/values-site.yaml",
             ]
-    assert len([event for event in events() if event[1:3] == ["upgrade", "--install"]]) == 1
+    assert len([event for event in events() if is_install(event)]) == 1
 
 
 def test_summary_uses_site_overrides_and_omits_disabled_backup_storage(deployment):
@@ -290,7 +305,7 @@ def test_failed_check_never_reaches_helm_install(deployment, monkeypatch, failur
         monkeypatch.setenv("DEPLOY_TEST_FAIL", failure)
     result = run("apply")
     assert result.returncode != 0
-    assert not any(event[1:3] == ["upgrade", "--install"] for event in events())
+    assert not any(is_install(event) for event in events())
 
 
 @pytest.mark.parametrize("document", ["docs/kubernetes.md", "deploy/helm/mm-bot-manager/README.md"])
@@ -311,7 +326,7 @@ def test_documented_install_uses_saved_profile_and_waits_for_jobs(
         if "./scripts/kubernetes-deploy.sh apply" in section.split("```", 1)[0]
     )
     result = run(block=block)
-    installs = [event for event in events() if event[1:3] == ["upgrade", "--install"]]
+    installs = [event for event in events() if is_install(event)]
     if rollback_flag is None:
         assert result.returncode != 0 and not installs
     else:
@@ -425,7 +440,7 @@ def test_legacy_config_and_overlay_continue_working_in_place(deployment):
     assert (config.read_bytes(), site.read_bytes()) == before
     assert not (workspace / LOCAL / "deployment.env").exists()
     assert not (workspace / LOCAL / "values-site.yaml").exists()
-    install = next(event for event in events() if event[1:3] == ["upgrade", "--install"])
+    install = next(event for event in events() if is_install(event))
     values = [install[i + 1] for i, word in enumerate(install) if word == "--values"]
     assert values[-1] == "values-site.yaml"
 
@@ -717,3 +732,37 @@ def test_external_damaged_checkout_is_not_treated_as_unversioned_storage(deploym
     result = run("init")
     assert result.returncode != 0 and "preserve this checkout" in result.stderr
     assert not site.exists()
+
+
+@pytest.mark.parametrize("operation", ["check", "apply"])
+@pytest.mark.parametrize("preview_fails", [False, True])
+def test_helm_preview_handles_legacy_env_without_kubectl_apply_or_manifest_output(
+    deployment, monkeypatch, operation, preview_fails
+):
+    workspace, run, events, configure = deployment
+    configure("values-external.yaml")
+    monkeypatch.setenv("DEPLOY_TEST_LEGACY_ENV", "1")
+    if preview_fails:
+        monkeypatch.setenv("DEPLOY_TEST_FAIL", "dry-run")
+    local_files = {
+        name: (workspace / LOCAL / name).read_bytes()
+        for name in ("deployment.env", "values-site.yaml")
+    }
+
+    result = run(operation)
+
+    assert (result.returncode != 0) == preview_fails, result.stderr
+    assert "PREVIEW_PAYLOAD_MUST_STAY_PRIVATE" not in result.stdout + result.stderr
+    assert "env[6].valueFrom" not in result.stderr
+    assert [event for event in events() if event[0] == "kubectl"] == [
+        ["kubectl", "config", "current-context"]
+    ]
+    previews = [event for event in events() if event[0] == "helm" and "--dry-run=server" in event]
+    assert len(previews) == 1
+    assert "--hide-secret" in previews[0]
+    assert previews[0][previews[0].index("--namespace") + 1] == "mm-bot-manager"
+    assert previews[0][previews[0].index("--kube-context") + 1] == "test-cluster"
+    installs = [event for event in events() if is_install(event)]
+    assert len(installs) == (1 if operation == "apply" and not preview_fails else 0)
+    for name, contents in local_files.items():
+        assert (workspace / LOCAL / name).read_bytes() == contents
