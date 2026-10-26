@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import contextlib
 import signal
@@ -13,6 +14,7 @@ from .mm_client import MattermostClient, MattermostError
 from .operations import recover_operations
 from .repository import BotRepo, PendingRequestRepo, TokenRepo
 from .runtime import instance_lock, process_events
+from .version import build_info, version_text
 from .ws_listener import stream_events
 
 
@@ -142,6 +144,8 @@ async def serve(settings: Settings, conn: DbConn) -> None:
 async def main_async() -> None:
     settings = load_settings()
     configure_logging(settings.log_level)
+    release, revision = build_info()
+    get_logger("mm_bot_manager").info("starting", version=release, revision=revision)
     conn = _connect_database(settings)
     loop = asyncio.get_running_loop()
     task = asyncio.current_task()
@@ -162,6 +166,9 @@ async def main_async() -> None:
 
 
 def run() -> None:
+    parser = argparse.ArgumentParser(description="Mattermost bot manager")
+    parser.add_argument("--version", action="version", version=version_text())
+    parser.parse_args()
     with contextlib.suppress(KeyboardInterrupt, asyncio.CancelledError):
         asyncio.run(main_async())
 

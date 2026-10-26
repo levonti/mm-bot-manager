@@ -10,6 +10,22 @@ fullnameOverride: ""
 app:
   existingSecret: mm-bot-manager-app
 
+# Optional ESO integration. The operator and store must already exist.
+# Targets retain the existingSecret names above/below; values contain references only.
+externalSecrets:
+  enabled: false
+  apiVersion: external-secrets.io/v1
+  refreshInterval: 1h
+  secretStoreRef:
+    name: ""
+    kind: SecretStore
+  app:
+    enabled: true
+    data: {}
+  database:
+    enabled: true
+    data: {}
+
 mattermost:
   url: https://mm.example.com
   approvers: ""

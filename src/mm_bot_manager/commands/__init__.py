@@ -18,6 +18,7 @@ from . import (
     token_list,
     token_revoke,
     update_bot,
+    version,
 )
 from . import (
     help as help_cmd,
@@ -31,6 +32,7 @@ REGISTRY: dict[tuple[str, ...], Handler] = {
     ("avatar",): bot_image.avatar,
     ("icon",): bot_image.icon,
     ("help",): help_cmd.handle,
+    ("version",): version.handle,
     ("create",): create_bot.handle,
     ("import",): import_bot.handle,
     ("list",): list_bots.handle,

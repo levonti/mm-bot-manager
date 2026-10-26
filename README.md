@@ -6,6 +6,14 @@ it in a channel) to create bots, edit their attributes, and mint/revoke access t
 Ownership metadata is stored in a SQLite or PostgreSQL database so users can only modify
 bots they created through this manager.
 
+## Versioning and releases
+
+The application uses stable SemVer (`MAJOR.MINOR.PATCH`). See the
+[release guide](docs/releases.md) for compatibility rules, release preparation,
+CI prerequisites and publishing. `pyproject.toml` is the application version source;
+Helm chart versions are independent. Run `mm-bot-manager --version` or send
+`!version` to inspect the installed version and available build revision.
+
 ## Requirements
 
 - Python 3.14 (only needed for local dev; the container image bundles its own)
@@ -16,6 +24,9 @@ For Kubernetes, follow the [deployment runbook](docs/kubernetes.md). Save the
 profile and kube-context once in `.local/kubernetes/deployment.env`; `scripts/kubernetes-deploy.sh`
 uses that selection for checks and installation. Installation
 requires an edited site overlay in addition to the database/storage profile.
+The Helm chart optionally supports [External Secrets Operator](deploy/helm/mm-bot-manager/README.md#external-secrets-operator-optional)
+to deliver configuration credentials from Vault through Kubernetes Secrets;
+using existing Kubernetes Secrets remains the default.
 Internal PostgreSQL maintenance uses `scripts/kubernetes-db.sh`, with full archive
 verification and application-Pod termination checks before destructive restore.
 
