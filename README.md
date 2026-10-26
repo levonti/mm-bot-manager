@@ -6,6 +6,14 @@ it in a channel) to create bots, edit their attributes, and mint/revoke access t
 Ownership metadata is stored in a SQLite or PostgreSQL database so users can only modify
 bots they created through this manager.
 
+## Versioning and releases
+
+The application uses stable SemVer (`MAJOR.MINOR.PATCH`). See the
+[release guide](docs/releases.md) for compatibility rules, release preparation,
+CI prerequisites and publishing. `pyproject.toml` is the application version source;
+Helm chart versions are independent. Run `mm-bot-manager --version` or send
+`!version` to inspect the installed version and available build revision.
+
 ## Requirements
 
 - Python 3.14 (only needed for local dev; the container image bundles its own)
