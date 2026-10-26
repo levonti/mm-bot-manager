@@ -107,3 +107,7 @@ was unchanged for this deployment/report task; the entire automated suite was no
 Next task: obtain authoritative repository URLs and criticality values for the two
 legacy bots and two legacy request records, then backfill them through the documented
 metadata workflow. Values were not guessed or changed during this deployment.
+
+Follow-up completed on 2026-10-26: [metadata backfill report](metadata-backfill-2026-10-26.md).
+Only the two bot records required backfill; both creation requests were already approved
+and their history was preserved.
