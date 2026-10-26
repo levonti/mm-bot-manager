@@ -39,10 +39,10 @@ uv sync --frozen --extra postgres
    changes, migrations and rollback restrictions when applicable. No `TODO` text
    may appear in release notes.
 2. Choose the next application and chart versions explicitly. For example, after
-   application 0.2.0/chart 0.1.3:
+   application 0.2.0/chart 0.2.1:
 
    ```sh
-   uv run --no-sync python scripts/release.py prepare 0.3.0 --chart-version 0.1.4
+   uv run --no-sync python scripts/release.py prepare 0.3.0 --chart-version 0.2.2
    uv sync --frozen --extra postgres
    uv run --no-sync python scripts/release.py check
    ```

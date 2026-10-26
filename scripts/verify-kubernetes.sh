@@ -3,6 +3,7 @@ set -euo pipefail
 
 chart="deploy/helm/mm-bot-manager"
 schema_dir="${KUBECONFORM_SCHEMA_LOCATION:-}"
+eso_schema_dir="${EXTERNAL_SECRETS_SCHEMA_LOCATION:-}"
 
 if [[ -z "$schema_dir" ]]; then
   echo "KUBECONFORM_SCHEMA_LOCATION must name a local directory with Kubernetes 1.21.1 schemas." >&2
@@ -13,6 +14,13 @@ if [[ ! -d "$schema_dir" ]]; then
   exit 2
 fi
 schema_dir="$(cd "$schema_dir" && pwd -P)"
+if [[ -n "$eso_schema_dir" ]]; then
+  if [[ ! -d "$eso_schema_dir" ]]; then
+    echo "EXTERNAL_SECRETS_SCHEMA_LOCATION is not a local directory: $eso_schema_dir" >&2
+    exit 2
+  fi
+  eso_schema_dir="$(cd "$eso_schema_dir" && pwd -P)"
+fi
 
 profiles=(
   "values-external.yaml"
@@ -26,11 +34,15 @@ trap 'rm -rf "$temporary_dir"' EXIT
 helm lint "$chart"
 
 validate_manifest() {
+  local locations=(-schema-location "$schema_dir/{{ .ResourceKind }}{{ .KindSuffix }}.json")
+  if [[ -n "$eso_schema_dir" ]]; then
+    locations+=(-schema-location "$eso_schema_dir/{{ .ResourceKind }}{{ .KindSuffix }}.json")
+  fi
   kubeconform \
     -strict \
     -summary \
     -kubernetes-version 1.21.1 \
-    -schema-location "$schema_dir/{{ .ResourceKind }}{{ .KindSuffix }}.json" \
+    "${locations[@]}" \
     "$1"
 }
 
@@ -59,3 +71,17 @@ helm template mmbot "$chart" --namespace mmbot --kube-version 1.21.1 \
   --values "$chart/examples/values-internal-longhorn.yaml" \
   --set mattermost.caBundle.existingConfigMap=mattermost-ca >"$output"
 validate_manifest "$output"
+
+if [[ -n "$eso_schema_dir" ]]; then
+  for profile in "${profiles[@]}"; do
+    eso_mode=internal
+    [[ "$profile" != values-external.yaml ]] || eso_mode=external
+    output="$temporary_dir/eso-${profile%.yaml}.yaml"
+    helm template mmbot "$chart" --namespace mmbot --kube-version 1.21.1 \
+      --values "$chart/examples/$profile" \
+      --values "$chart/examples/values-eso-$eso_mode.yaml" >"$output"
+    validate_manifest "$output"
+  done
+else
+  echo 'ESO CRD schema validation skipped: set EXTERNAL_SECRETS_SCHEMA_LOCATION to a local schema directory.'
+fi

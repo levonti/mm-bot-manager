@@ -158,14 +158,16 @@ SUMMARY
 helm template "$release" "$temporary_dir" --values "$profile" --values "$site" >"$temporary_dir/summary.yaml"
 awk '/^data:$/ { show=1; next } show && NF { print }' "$temporary_dir/summary.yaml"
 
-# pipefail prevents an unsuccessful render from being masked by kubectl.
-helm template "$release" "$chart" --namespace "$namespace" \
-  --values "$profile" --values "$site" | \
-  kubectl --context "$context" -n "$namespace" apply --dry-run=server -f -
+# Preview with the same release manager and values as the real upgrade.
+# kubectl apply cannot infer field removals from Helm's release history: without
+# last-applied it can retain a legacy env.value beside the new env.valueFrom.
+helm_args=(upgrade --install "$release" "$chart" --kube-context "$context" --namespace "$namespace"
+  --values "$profile" --values "$site")
+# Helm's server mode reads cluster capabilities/release state; it does not issue
+# admission dry-run PATCHes. Do not print the rendered manifest/values to logs.
+helm "${helm_args[@]}" --dry-run=server --hide-secret >"$temporary_dir/helm-preview.txt"
 if [ "$operation" = check ]; then
-  echo 'Checks passed; run scripts/kubernetes-deploy.sh apply to install/upgrade this saved configuration'
+  echo 'Helm preview passed; run scripts/kubernetes-deploy.sh apply to install/upgrade this saved configuration'
   exit 0
 fi
-helm upgrade --install "$release" "$chart" --kube-context "$context" --namespace "$namespace" \
-  --values "$profile" --values "$site" \
-  "$rollback_flag" --wait --wait-for-jobs --timeout=10m
+helm "${helm_args[@]}" "$rollback_flag" --wait --wait-for-jobs --timeout=10m

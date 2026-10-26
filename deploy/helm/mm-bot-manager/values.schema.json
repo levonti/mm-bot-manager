@@ -9,6 +9,7 @@
     "nameOverride",
     "fullnameOverride",
     "app",
+    "externalSecrets",
     "mattermost",
     "logLevel",
     "health",
@@ -43,6 +44,61 @@
       "additionalProperties": false,
       "required": ["existingSecret"],
       "properties": { "existingSecret": { "$ref": "#/definitions/nonEmptyString" } }
+    },
+    "externalSecrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "apiVersion",
+        "refreshInterval",
+        "secretStoreRef",
+        "app",
+        "database"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "apiVersion": {
+          "enum": [
+            "external-secrets.io/v1",
+            "external-secrets.io/v1beta1"
+          ]
+        },
+        "refreshInterval": {
+          "type": "string",
+          "pattern": "^(?:[0-9]+(?:\\.[0-9]+)?(?:h|m|s|ms))+$",
+          "not": {
+            "pattern": "^(?:0+(?:\\.0+)?(?:h|m|s|ms))+$"
+          }
+        },
+        "secretStoreRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "kind"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "SecretStore",
+                "ClusterSecretStore"
+              ]
+            }
+          }
+        },
+        "app": {
+          "$ref": "#/definitions/externalSecretTarget"
+        },
+        "database": {
+          "$ref": "#/definitions/externalSecretTarget"
+        }
+      }
     },
     "mattermost": {
       "type": "object",
@@ -156,7 +212,256 @@
       ]
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "externalSecrets": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "externalSecrets": {
+            "properties": {
+              "secretStoreRef": {
+                "properties": {
+                  "name": {
+                    "$ref": "#/definitions/nonEmptyString"
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "properties": {
+                  "app": {
+                    "properties": {
+                      "enabled": {
+                        "const": true
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "database": {
+                    "properties": {
+                      "enabled": {
+                        "const": true
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "externalSecrets": {
+            "properties": {
+              "enabled": {
+                "const": true
+              },
+              "app": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "externalSecrets": {
+            "properties": {
+              "app": {
+                "properties": {
+                  "data": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "MM_TOKEN",
+                      "MM_BOT_TOKEN"
+                    ],
+                    "properties": {
+                      "MM_TOKEN": {
+                        "$ref": "#/definitions/externalSecretRemoteRef"
+                      },
+                      "MM_BOT_TOKEN": {
+                        "$ref": "#/definitions/externalSecretRemoteRef"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "externalSecrets": {
+            "properties": {
+              "enabled": {
+                "const": true
+              },
+              "database": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          },
+          "database": {
+            "properties": {
+              "mode": {
+                "const": "external"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "externalSecrets": {
+            "properties": {
+              "database": {
+                "properties": {
+                  "data": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "DB_URL"
+                    ],
+                    "properties": {
+                      "DB_URL": {
+                        "$ref": "#/definitions/externalSecretRemoteRef"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "externalSecrets": {
+            "properties": {
+              "enabled": {
+                "const": true
+              },
+              "database": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          },
+          "database": {
+            "properties": {
+              "mode": {
+                "const": "internal"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "externalSecrets": {
+            "properties": {
+              "database": {
+                "properties": {
+                  "data": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "POSTGRES_USER",
+                      "POSTGRES_PASSWORD",
+                      "POSTGRES_DB"
+                    ],
+                    "properties": {
+                      "POSTGRES_USER": {
+                        "$ref": "#/definitions/externalSecretRemoteRef"
+                      },
+                      "POSTGRES_PASSWORD": {
+                        "$ref": "#/definitions/externalSecretRemoteRef"
+                      },
+                      "POSTGRES_DB": {
+                        "$ref": "#/definitions/externalSecretRemoteRef"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "definitions": {
+    "externalSecretRemoteRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "property": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "version": {
+          "$ref": "#/definitions/nonEmptyString"
+        }
+      }
+    },
+    "externalSecretTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "data"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/externalSecretRemoteRef"
+          }
+        }
+      }
+    },
     "nonEmptyString": { "type": "string", "minLength": 1 },
     "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
     "positiveQuantity": {

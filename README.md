@@ -24,6 +24,9 @@ For Kubernetes, follow the [deployment runbook](docs/kubernetes.md). Save the
 profile and kube-context once in `.local/kubernetes/deployment.env`; `scripts/kubernetes-deploy.sh`
 uses that selection for checks and installation. Installation
 requires an edited site overlay in addition to the database/storage profile.
+The Helm chart optionally supports [External Secrets Operator](deploy/helm/mm-bot-manager/README.md#external-secrets-operator-optional)
+to deliver configuration credentials from Vault through Kubernetes Secrets;
+using existing Kubernetes Secrets remains the default.
 Internal PostgreSQL maintenance uses `scripts/kubernetes-db.sh`, with full archive
 verification and application-Pod termination checks before destructive restore.
 
