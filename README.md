@@ -138,6 +138,37 @@ a valid local value can still receive an API error.
 | `!approve <id>` | (Approvers only) Approve creation, import or update; self-approval is forbidden |
 | `!deny <id> [reason]` | (Approvers only) Deny a pending request |
 
+### Bot images
+
+After a bot has been created or imported, its local owner can change its profile
+image in a **direct message** to the manager. No approval is required.
+
+| Command | Attachment in the same message | Result |
+| --- | --- | --- |
+| `!icon set my-bot` | One PNG or JPEG | Set the bot profile image |
+| `!icon reset my-bot` | None | Restore the default image |
+| `!avatar set my-bot` | One PNG or JPEG | Alias for `!icon set` |
+| `!avatar reset my-bot` | None | Alias for `!icon reset` |
+
+Upload the file yourself and include the command in that same message. Files
+from another message or user are rejected. Images must have a single frame,
+be at most 5 MiB, and have neither dimension above 4096 pixels. They are centered,
+cropped to a square, and re-encoded as a 512×512 PNG without source metadata.
+SVG and animated images are not accepted.
+
+Both commands use `/users/{id}/image`. The legacy `/bots/{id}/icon` route in the
+[OpenAPI reference](https://github.com/mattermost/mattermost-api-reference/blob/master/v4/source/bots.yaml)
+is absent from the [Mattermost 10.11 server router](https://github.com/mattermost/mattermost/blob/v10.11.0/server/channels/api4/bot.go);
+this feature changes the profile image through the standard user image API.
+
+The manager downloads files with `MM_BOT_TOKEN` and writes images with `MM_TOKEN`.
+The administrative account needs `edit_other_users` to change another account's
+profile image. Attachments remain in Mattermost under its retention policy;
+the manager does not persist image bytes. Changes are blocked while a bot update
+is being applied or needs review, or a creation/token operation is unfinished.
+A timeout or server error during a write can leave the outcome uncertain: check
+Mattermost before retrying. The manager does not automatically retry image changes.
+
 ## Importing existing bots
 
 In a DM, send `!import legacy-integration --repo https://git.example/team/project --criticality 1` (legacy names need no `-bot` suffix).

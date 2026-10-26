@@ -50,9 +50,15 @@ class MattermostClient:
         path: str,
         *,
         json: Any | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
     ) -> Any:
         started = monotonic()
-        response = await self._client.request(method, path, json=json)
+        response = await self._client.request(method, path, json=json, files=files)
+        return self._decode_response(response, method, path, started)
+
+    def _decode_response(
+        self, response: httpx.Response, method: str, path: str, started: float
+    ) -> Any:
         if response.status_code >= 400:
             try:
                 payload = response.json()
@@ -79,6 +85,38 @@ class MattermostClient:
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
+
+    async def get_file_info(self, file_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/files/{file_id}/info")  # type: ignore[no-any-return]
+
+    async def download_image(self, file_id: str, limit: int) -> bytes:
+        from .i18n import UserFacingError
+
+        path = f"/files/{file_id}"
+        started = monotonic()
+        async with self._client.stream("GET", path) as response:
+            if response.status_code >= 400:
+                # Error bodies are untrusted too: do not buffer an arbitrary body.
+                self._decode_response(
+                    httpx.Response(response.status_code, headers=response.headers),
+                    "GET",
+                    path,
+                    started,
+                )
+            content = bytearray()
+            async for chunk in response.aiter_bytes(chunk_size=65536):
+                if len(content) + len(chunk) > limit:
+                    raise UserFacingError("images.invalid")
+                content.extend(chunk)
+            return bytes(content)
+
+    async def set_profile_image(self, bot_id: str, data: bytes) -> None:
+        await self._request(
+            "POST", f"/users/{bot_id}/image", files={"image": ("avatar.png", data, "image/png")}
+        )
+
+    async def reset_profile_image(self, bot_id: str) -> None:
+        await self._request("DELETE", f"/users/{bot_id}/image")
 
     async def get_me(self) -> dict[str, Any]:
         return await self._request("GET", "/users/me")  # type: ignore[no-any-return]

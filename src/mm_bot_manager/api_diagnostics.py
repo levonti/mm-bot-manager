@@ -4,6 +4,9 @@ import re
 from typing import Any
 
 _ROUTES = (
+    r"/files/[^/]+/info",
+    r"/files/[^/]+",
+    r"/users/[^/]+/image",
     r"/users/me",
     r"/users/username/[^/]+",
     r"/users/tokens/revoke",
