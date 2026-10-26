@@ -6,6 +6,7 @@ from ..mm_client import MattermostError
 from ..operations import OperationError, create_managed_bot
 from ..permissions import is_approver, is_self_approval
 from ..updates import UpdateError, approve_update
+from ..validation import BotValidationError
 from .context import CommandContext
 from .parser import ParsedArgs
 
@@ -34,7 +35,7 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     if req.kind == "update":
         try:
             username = await approve_update(ctx, req)
-        except UpdateError as exc:
+        except (UpdateError, BotValidationError) as exc:
             return ctx.error(exc)
         try:
             dm = await ctx.bot_mm.create_direct_channel(ctx.manager_user_id, req.requester_user_id)
@@ -84,7 +85,7 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
             description=req.description,
             request=req,
         )
-    except OperationError as e:
+    except (OperationError, BotValidationError) as e:
         return ctx.tr("approve.could_not_create_bot", v0=ctx.error(e))
     except MattermostError as e:
         return ctx.tr("approve.could_not_create_bot", v0=ctx.error(e))

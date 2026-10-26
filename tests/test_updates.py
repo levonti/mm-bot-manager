@@ -696,7 +696,7 @@ async def test_review_preserves_whitespace_and_rejects_truncation(env):
     reply = await dispatch(
         env, '!update renamed --criticality 1 --description "' + "x" * 13000 + '"'
     )
-    assert "too large to review" in reply
+    assert "at most 1024" in reply
     assert UpdateRepo(env.bot_repo.conn).active(BOT) is None
     assert env.bot_repo.get(BOT).criticality == 2
 

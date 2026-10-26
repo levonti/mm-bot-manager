@@ -5,6 +5,7 @@ from ..localization import user_language
 from ..metadata import BotMetadata, MetadataError, validate_metadata
 from ..mm_client import MattermostError
 from ..operations import OperationError, create_managed_bot
+from ..validation import BotValidationError, validate_bot_fields
 from .context import CommandContext
 from .parser import ParsedArgs
 
@@ -16,8 +17,6 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     display_name = args.take_flag("display-name")
     description = args.take_flag("description")
 
-    if not username.endswith("-bot"):
-        return ctx.tr("create_bot.bot_username_must_end_with_bot_got", v0=username)
     if len(args.positional) != 1 or args.flags.keys() - {
         "repo",
         "criticality",
@@ -26,8 +25,20 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     }:
         return ctx.tr("create_bot.usage_create_username_repo_url_criticality")
     try:
+        validate_bot_fields(
+            {
+                key: value
+                for key, value in {
+                    "username": username,
+                    "display_name": display_name,
+                    "description": description,
+                }.items()
+                if value is not None
+            },
+            require_bot_suffix=True,
+        )
         metadata = validate_metadata(args.take_flag("repo"), args.take_flag("criticality"))
-    except MetadataError as exc:
+    except (MetadataError, BotValidationError) as exc:
         return ctx.error(exc)
 
     if not ctx.approver_ids:
@@ -52,7 +63,7 @@ async def _create_now(
             git_repository=metadata.git_repository,
             criticality=metadata.criticality,
         )
-    except OperationError as e:
+    except (OperationError, BotValidationError) as e:
         return ctx.tr("approve.could_not_create_bot", v0=ctx.error(e))
     except MattermostError as e:
         if e.status == 403:

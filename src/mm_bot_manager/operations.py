@@ -8,6 +8,7 @@ from .logging import get_logger
 from .metadata import validate_metadata
 from .mm_client import MattermostError
 from .permissions import is_self_approval
+from .validation import validate_bot_fields
 
 if TYPE_CHECKING:
     from .commands.context import CommandContext
@@ -116,6 +117,18 @@ async def create_managed_bot(
 ) -> str:
     if request is not None and is_self_approval(ctx, request):
         raise OperationError("approve.self_forbidden")
+    validate_bot_fields(
+        {
+            key: value
+            for key, value in {
+                "username": username,
+                "display_name": display_name,
+                "description": description,
+            }.items()
+            if value is not None
+        },
+        require_bot_suffix=True,
+    )
     metadata = validate_metadata(
         request.git_repository if request else git_repository,
         request.criticality if request else criticality,

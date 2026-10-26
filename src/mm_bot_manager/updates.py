@@ -21,6 +21,7 @@ from .logging import get_logger
 from .metadata import cell, validate_metadata
 from .permissions import is_approver, is_self_approval
 from .repository import BotRecord, MetadataRepo, PendingRequestRecord
+from .validation import validate_bot_fields
 
 if TYPE_CHECKING:
     from .commands.context import CommandContext
@@ -165,6 +166,7 @@ def _diff(record: UpdateRecord, language: str) -> str:
 
 
 async def submit_update(ctx: CommandContext, bot: BotRecord, changes: dict[str, Any]) -> str:
+    validate_bot_fields(changes)
     if not ctx.approver_ids:
         raise UpdateError("updates.approvers_required")
     old = snapshot(bot)
@@ -247,6 +249,8 @@ def _matches(remote: dict[str, str], values: dict[str, Any], record: UpdateRecor
 
 
 async def _apply_remote(ctx: CommandContext, record: UpdateRecord) -> None:
+    # Recovery can also reach this path using proposals saved by older versions.
+    validate_bot_fields({field: record.new[field] for field in record.remote_fields})
     remote = await _remote(ctx, record)
     if any(remote[key] not in (record.old[key], record.new[key]) for key in _remote_keys(record)):
         raise UpdateError("updates.remote_changed")
@@ -318,6 +322,7 @@ async def approve_update(ctx: CommandContext, req: PendingRequestRecord) -> str:
     record = UpdateRepo(ctx.bot_repo.conn).get(req.request_id)
     if record is None:
         raise UpdateError("updates.missing_journal")
+    validate_bot_fields({field: record.new[field] for field in record.remote_fields})
     async with bot_mutation(ctx, record.bot_user_id):
         try:
             await _people(ctx, req, ctx.caller_user_id)

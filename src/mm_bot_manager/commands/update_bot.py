@@ -4,6 +4,7 @@ from ..metadata import MetadataError, validate_metadata
 from ..mm_client import MattermostError
 from ..permissions import is_approver
 from ..updates import UpdateError, bot_mutation, require_idle, submit_update
+from ..validation import BotValidationError, validate_bot_fields
 from .context import CommandContext
 from .parser import ParsedArgs
 
@@ -39,11 +40,8 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     ):
         if flag in args.flags:
             changes[field] = args.flags[flag]
-    if "username" in changes and (
-        not changes["username"] or any(char.isspace() for char in changes["username"])
-    ):
-        return ctx.tr("updates.invalid_username")
     try:
+        validate_bot_fields(changes)
         if args.flags.keys() & {"repo", "criticality"}:
             metadata = validate_metadata(
                 args.flags.get("repo", bot.git_repository),
@@ -56,7 +54,7 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
                 return await submit_update(ctx, bot, changes)
             await ctx.mm.patch_bot(bot.bot_user_id, **changes)
             ctx.bot_repo.patch(bot.bot_user_id, **changes)
-    except (MetadataError, UpdateError) as exc:
+    except (MetadataError, UpdateError, BotValidationError) as exc:
         return ctx.error(exc)
     except MattermostError as exc:
         return ctx.tr("update_bot.could_not_update_bot", v0=ctx.error(exc))
