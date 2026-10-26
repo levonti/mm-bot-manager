@@ -17,6 +17,12 @@ RUN uv sync --frozen --no-dev --extra postgres
 
 FROM python:3.14-slim AS runtime
 
+ARG APP_VERSION=unknown
+ARG MM_BUILD_REVISION=unknown
+ENV MM_BUILD_REVISION=$MM_BUILD_REVISION
+LABEL org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$MM_BUILD_REVISION
+
 # libpq is required by psycopg[binary] at runtime
 RUN apt-get update && apt-get install -y --no-install-recommends libpq5 tzdata \
     && rm -rf /var/lib/apt/lists/*

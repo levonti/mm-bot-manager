@@ -1,9 +1,20 @@
 image: python:3.14-slim
 
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+
 stages:
   - verify
+  - package
+  - release
 
 variables:
+  GIT_DEPTH: "0"
   HELM_VERSION: v3.17.3
   UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
   POSTGRES_DB: mm_bot_manager_test
@@ -14,6 +25,8 @@ variables:
 
 verify:
   stage: verify
+  rules:
+    - when: on_success
   services:
     - name: postgres:15-alpine
       alias: postgres
@@ -41,8 +54,18 @@ verify:
     - pip install --no-cache-dir uv==0.11.7
     - uv sync --frozen --extra postgres
   script:
-    - uv run --no-sync ruff check src tests
-    - uv run --no-sync ruff format --check src tests
+    - uv run --no-sync python scripts/release.py check
+    - |
+      if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" ]; then
+        git -c http.sslCAInfo="${CI_SERVER_TLS_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}" fetch origin "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+        uv run --no-sync python scripts/release.py check --base "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+      fi
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        git -c http.sslCAInfo="${CI_SERVER_TLS_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}" fetch origin "$CI_DEFAULT_BRANCH"
+        git merge-base --is-ancestor "$CI_COMMIT_SHA" FETCH_HEAD
+      fi
+    - uv run --no-sync ruff check src tests scripts/release.py
+    - uv run --no-sync ruff format --check src tests scripts/release.py
     - uv run --no-sync mypy src
     - helm lint deploy/helm/mm-bot-manager
     - uv run --no-sync pytest -q --cov=mm_bot_manager --cov-branch --cov-fail-under=85 --cov-report=term-missing --cov-report=xml:coverage.xml --junitxml=report.xml
@@ -53,3 +76,108 @@ verify:
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
+
+# Stable release tags only; malformed tags are still rejected by verify.
+.release-tag:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/'
+
+package-release:
+  extends: .release-tag
+  stage: package
+  before_script:
+    - pip install --no-cache-dir uv==0.11.7
+    - uv sync --frozen --extra postgres
+    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl
+    - |
+      case "$(uname -m)" in
+        x86_64) helm_arch=amd64 ;;
+        aarch64) helm_arch=arm64 ;;
+        *) exit 1 ;;
+      esac
+      helm_archive="helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz"
+      curl -fsSL "https://get.helm.sh/${helm_archive}" -o "/tmp/${helm_archive}"
+      curl -fsSL "https://get.helm.sh/${helm_archive}.sha256sum" -o "/tmp/${helm_archive}.sha256sum"
+      (cd /tmp && sha256sum --check "${helm_archive}.sha256sum")
+      tar -xzf "/tmp/${helm_archive}" -C /tmp
+      install -m 0755 "/tmp/linux-${helm_arch}/helm" /usr/local/bin/helm
+  script:
+    - uv run --no-sync python scripts/release.py check
+    - uv build --no-sources
+    - helm package deploy/helm/mm-bot-manager --destination dist
+    - uv run --no-sync python scripts/release.py notes --output release-notes.md
+    - sha256sum dist/* > SHA256SUMS
+    - mv SHA256SUMS dist/
+    - echo "RELEASE_ARTIFACT_JOB_ID=$CI_JOB_ID" > package.env
+  artifacts:
+    expire_in: never
+    paths:
+      - dist/
+      - release-notes.md
+    reports:
+      dotenv: package.env
+
+# Requires a runner configured for privileged Docker-in-Docker with TLS.
+build-release-image:
+  extends: .release-tag
+  stage: package
+  resource_group: stable-release-image
+  image: docker:27.5.1-cli
+  services:
+    - name: docker:27.5.1-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: /certs
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: /certs/client
+  before_script:
+    - apk add --no-cache jq
+  script:
+    - test -n "$CI_REGISTRY_IMAGE"
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
+    - |
+      version="${CI_COMMIT_TAG#v}"
+      # Guard accidental overwrite; enforce immutable version tags in registry settings too.
+      if docker manifest inspect "$CI_REGISTRY_IMAGE:$version" > /tmp/manifest.out 2> /tmp/manifest.err; then
+        echo "Release image tag already exists; refusing to overwrite" >&2
+        exit 1
+      elif ! grep -Eqi 'no such manifest|manifest unknown' /tmp/manifest.err; then
+        echo "Cannot establish release image tag absence; refusing to publish" >&2
+        exit 1
+      fi
+      docker buildx build --push --platform linux/amd64 \
+        --build-arg "APP_VERSION=$version" \
+        --build-arg "MM_BUILD_REVISION=$CI_COMMIT_SHA" \
+        --tag "$CI_REGISTRY_IMAGE:$version" \
+        --tag "$CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHA" \
+        --metadata-file build-metadata.json .
+      digest="$(jq -er '."containerimage.digest" | select(test("^sha256:[a-f0-9]{64}$"))' build-metadata.json)"
+      printf 'RELEASE_IMAGE=%s@%s\n' "$CI_REGISTRY_IMAGE" "$digest" > image.env
+  artifacts:
+    expire_in: never
+    paths:
+      - build-metadata.json
+    reports:
+      dotenv: image.env
+
+publish-release:
+  extends: .release-tag
+  stage: release
+  image: registry.gitlab.com/gitlab-org/cli:latest
+  needs:
+    - job: package-release
+      artifacts: true
+    - job: build-release-image
+      artifacts: true
+  script:
+    - test -n "$RELEASE_IMAGE"
+    - printf '\nCommit `%s`\n\nContainer `%s`\n' "$CI_COMMIT_SHA" "$RELEASE_IMAGE" >> release-notes.md
+  release:
+    tag_name: '$CI_COMMIT_TAG'
+    name: 'mm-bot-manager $CI_COMMIT_TAG'
+    description: release-notes.md
+    assets:
+      links:
+        - name: Python packages, Helm chart and SHA256SUMS
+          url: '$CI_PROJECT_URL/-/jobs/$RELEASE_ARTIFACT_JOB_ID/artifacts/download'
