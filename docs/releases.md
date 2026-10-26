@@ -123,6 +123,52 @@ preserving its digest, and follow the Kubernetes runbook using `image.digest`.
 Multi-architecture images remain a separate build concern; the release pipeline
 currently produces Linux amd64 only.
 
+## Vulnerability scanning
+
+The release-image build job also runs `scripts/check_runtime_security.py` inside
+the exact pushed digest with UID/GID 1000, no capabilities, no-new-privileges,
+read-only root and writable temporary `/tmp`. It checks that vulnerable unused
+entry points and setuid/setgid files have not returned and exercises application
+imports, CA loading and temporary storage. A failed check fails the image job;
+as with the scan below, it does not retract already-pushed tags. The
+[Debian High review](security/debian-high-2026-10-26.md) distinguishes absent
+components from mitigated library findings; no advisory is automatically ignored.
+
+The [2026-10-26 v0.3.0 assessment](security/trivy-2026-10-26.md) records the initial
+findings and proposed remediation, with sanitized scan evidence.
+
+CI pins `aquasec/trivy:0.76.1` and caches its vulnerability database. The runner
+needs access to the scanner image, Trivy's database registries and Docker Hub.
+`scan-dependencies` scans lockfiles (including development dependencies) in every
+branch, merge request and tag pipeline. It excludes local virtual environments
+and tool caches. `scan-release-image` scans the exact `RELEASE_IMAGE` digest
+produced by `build-release-image`, using remote registry access without DinD.
+The release image must be publicly readable; private repositories need separately
+configured read credentials for the scanner.
+
+Both jobs preserve full JSON and text reports as ordinary job artifacts for 30
+days. They then fail on HIGH/CRITICAL vulnerabilities for which Trivy records a
+fix. Unfixed and lower-severity findings remain visible in the full reports;
+they require review even when the gate passes. Scanner or database download
+errors fail the job. Reports are not GitLab's native container-scanning format.
+
+`publish-release` explicitly depends on a successful image scan. This prevents
+GitLab Release creation but does not undo Docker Hub tags already published by
+the build job. A failed scan requires investigation; do not overwrite the
+immutable release tags to repair it. Publish a corrected version instead.
+
+To reproduce the image scan with Trivy 0.76.1:
+
+```sh
+trivy image --image-src remote --platform linux/amd64 --scanners vuln \
+  --format json --output trivy-image.json \
+  levonti17/mm-bot-manager@sha256:<release-digest>
+trivy convert --scanners vuln --format table --output trivy-image.txt trivy-image.json
+trivy image --image-src remote --platform linux/amd64 --scanners vuln \
+  --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+  levonti17/mm-bot-manager@sha256:<release-digest>
+```
+
 ## Docker Compose upgrades
 
 Set `MM_BOT_MANAGER_IMAGE=levonti17/mm-bot-manager@sha256:<release-digest>` in the
@@ -148,9 +194,9 @@ is provenance, not a replacement for image digest verification.
 
 ```sh
 uv run --no-sync python scripts/release.py check
-uv run --no-sync ruff check src tests scripts/release.py
-uv run --no-sync ruff format --check src tests scripts/release.py
-uv run --no-sync mypy src
+uv run --no-sync ruff check src tests scripts/release.py scripts/check_runtime_security.py
+uv run --no-sync ruff format --check src tests scripts/release.py scripts/check_runtime_security.py
+uv run --no-sync mypy src scripts/check_runtime_security.py
 helm lint deploy/helm/mm-bot-manager
 uv run --no-sync pytest -q --cov=mm_bot_manager --cov-branch --cov-fail-under=85
 uv build --no-sources

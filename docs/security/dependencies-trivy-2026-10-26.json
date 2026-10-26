@@ -1,0 +1,118 @@
+{
+  "scanner": {
+    "name": "Trivy",
+    "version": "0.76.1",
+    "database_updated_at": "2026-10-26T14:38:04.845305817Z"
+  },
+  "scanned_at": "2026-10-26T22:40:30.113956+03:00",
+  "source_revision": "b136efd079e9cc5a836c16710a38116725574736",
+  "include_dev_dependencies": true,
+  "results": [
+    {
+      "target": "uv.lock",
+      "type": "uv",
+      "findings": [
+        {
+          "id": "CVE-2026-63374",
+          "package": "anyio",
+          "installed": "4.13.0",
+          "fixed": "4.14.2",
+          "severity": "CRITICAL",
+          "status": "fixed",
+          "title": "anyio: AnyIO: TLS certificate spoofing via improper internationalized domain name encoding",
+          "url": "https://avd.aquasec.com/nvd/cve-2026-63374"
+        },
+        {
+          "id": "CVE-2026-64847",
+          "package": "anyio",
+          "installed": "4.13.0",
+          "fixed": "4.14.2",
+          "severity": "MEDIUM",
+          "status": "fixed",
+          "title": "anyio: AnyIO: Denial of Service due to undrained stderr in process-pool workers",
+          "url": "https://avd.aquasec.com/nvd/cve-2026-64847"
+        },
+        {
+          "id": "GHSA-6q48-6c7w-9gw2",
+          "package": "certifi",
+          "installed": "2026.4.22",
+          "fixed": "2026.10.19",
+          "severity": "CRITICAL",
+          "status": "fixed",
+          "title": "certifi bundles emSign root CAs with compromised intermediate CA keys",
+          "url": "https://github.com/advisories/GHSA-6q48-6c7w-9gw2"
+        },
+        {
+          "id": "CVE-2026-45409",
+          "package": "idna",
+          "installed": "3.13",
+          "fixed": "3.15",
+          "severity": "MEDIUM",
+          "status": "fixed",
+          "title": "python-idna: idna: Denial of Service via specially crafted long inputs",
+          "url": "https://avd.aquasec.com/nvd/cve-2026-45409"
+        },
+        {
+          "id": "GHSA-4xgf-cpjx-pc3j",
+          "package": "pydantic-settings",
+          "installed": "2.14.0",
+          "fixed": "2.14.2",
+          "severity": "MEDIUM",
+          "status": "fixed",
+          "title": "pydantic-settings: NestedSecretsSettingsSource follows symlinks outside secrets_dir, enabling local file read and bypassing secrets_dir_max_size",
+          "url": "https://github.com/advisories/GHSA-4xgf-cpjx-pc3j"
+        },
+        {
+          "id": "CVE-2026-44431",
+          "package": "urllib3",
+          "installed": "2.6.3",
+          "fixed": "2.7.0",
+          "severity": "HIGH",
+          "status": "fixed",
+          "title": "urllib3: urllib3: Information disclosure via cross-origin redirects forwarding sensitive headers",
+          "url": "https://avd.aquasec.com/nvd/cve-2026-44431"
+        },
+        {
+          "id": "CVE-2026-44432",
+          "package": "urllib3",
+          "installed": "2.6.3",
+          "fixed": "2.7.0",
+          "severity": "HIGH",
+          "status": "fixed",
+          "title": "urllib3: urllib3: Denial of Service due to excessive HTTP response decompression",
+          "url": "https://avd.aquasec.com/nvd/cve-2026-44432"
+        },
+        {
+          "id": "CVE-2026-97687",
+          "package": "urllib3",
+          "installed": "2.6.3",
+          "fixed": "2.8.0",
+          "severity": "HIGH",
+          "status": "fixed",
+          "title": "urllib3: urllib3: Traffic interception via HTTPS proxy TLS configuration override",
+          "url": "https://avd.aquasec.com/nvd/cve-2026-97687"
+        },
+        {
+          "id": "CVE-2026-97689",
+          "package": "urllib3",
+          "installed": "2.6.3",
+          "fixed": "2.8.0",
+          "severity": "HIGH",
+          "status": "fixed",
+          "title": "urllib3: urllib3: Denial of Service via unbounded memory allocation in chunk parser",
+          "url": "https://avd.aquasec.com/nvd/cve-2026-97689"
+        },
+        {
+          "id": "CVE-2026-97688",
+          "package": "urllib3",
+          "installed": "2.6.3",
+          "fixed": "2.8.0",
+          "severity": "MEDIUM",
+          "status": "fixed",
+          "title": "urllib3: urllib3: Denial of Service via infinite loop during chunked Deflate decoding",
+          "url": "https://avd.aquasec.com/nvd/cve-2026-97688"
+        }
+      ]
+    }
+  ]
+}
