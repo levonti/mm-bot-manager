@@ -14,6 +14,6 @@ def format_datetime(value: str | None, language: str, timezone: str = "UTC") -> 
         date = date.astimezone(ZoneInfo(timezone))
     except ValueError, OverflowError:
         return tr(language, "date.unknown")
-    pattern = "%d.%m.%Y %H:%M:%S" if language == "ru" else "%Y-%m-%d %H:%M:%S"
+    pattern = "%d.%m.%Y %H:%M:%S" if language in {"ru", "de"} else "%Y-%m-%d %H:%M:%S"
     offset = date.strftime("%z")
     return f"{date.strftime(pattern)} (UTC{offset[:3]}:{offset[3:]})"

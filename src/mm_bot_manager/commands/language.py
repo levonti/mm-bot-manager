@@ -12,7 +12,7 @@ async def handle(ctx: CommandContext, args: ParsedArgs) -> str:
     preferences = PreferenceRepo(ctx.bot_repo.conn)
     if args.positional:
         choice = args.positional[0]
-        if choice not in {"ru", "en", "auto"}:
+        if choice not in {"ru", "en", "de", "auto"}:
             return ctx.tr("language.usage")
         if ctx.channel_type != "D":
             return ctx.tr("language.dm")

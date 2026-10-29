@@ -589,7 +589,7 @@ class PreferenceRepo:
         return (row["language"], row["catalog_format"]) if row else ("auto", "cards")
 
     def language(self, user_id: str, language: str) -> None:
-        if language not in {"auto", "en", "ru"}:
+        if language not in {"auto", "en", "ru", "de"}:
             raise ValueError("Invalid language code")
         self.conn.execute(
             "INSERT INTO user_preference (user_id, language) VALUES (?, ?) "

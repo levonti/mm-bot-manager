@@ -1,5 +1,7 @@
 # Kubernetes deployment runbook
 
+[English](en/operations.md) · [Русский](ru/operations.md) · [Deutsch](de/operations.md)
+
 Deploy `mm-bot-manager` with Helm 3 or 4 on Kubernetes `>= 1.21.1`, using either an
 external PostgreSQL service or one internal PostgreSQL StatefulSet. The chart has
 no Helm dependencies. All commands below run in **Bash from the repository root**.

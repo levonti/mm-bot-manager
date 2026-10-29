@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     mm_approvers: str = Field(default="")
     mm_catalog_viewers: str = Field(default="")
     mm_feedback_handlers: str = Field(default="")
-    mm_default_language: Literal["en", "ru"] = "en"
+    mm_default_language: Literal["en", "ru", "de"] = "en"
     mm_display_timezone: str = "UTC"
     max_workers: int = Field(default=4, ge=1, le=32)
     event_queue_size: int = Field(default=100, ge=1, le=10000)

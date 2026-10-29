@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from weakref import WeakKeyDictionary
 
 from .db import DbConn, transaction
-from .i18n import UserFacingError, tr
+from .i18n import SUPPORTED_LANGUAGES, UserFacingError, tr
 from .localization import user_language
 from .logging import get_logger
 from .metadata import cell, validate_metadata
@@ -176,7 +176,9 @@ async def submit_update(ctx: CommandContext, bot: BotRecord, changes: dict[str, 
     metadata = validate_metadata(new["git_repository"], new["criticality"])
     request_id = token_hex(8)
     record = UpdateRecord(request_id, bot.bot_user_id, old, new)
-    if any(len(_diff(record, language).encode("utf-8")) > 12000 for language in ("en", "ru")):
+    if any(
+        len(_diff(record, language).encode("utf-8")) > 12000 for language in SUPPORTED_LANGUAGES
+    ):
         raise UpdateError("updates.review_too_large")
     with transaction(ctx.bot_repo.conn):
         _lock_bot(ctx, bot.bot_user_id)

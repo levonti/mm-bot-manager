@@ -1,5 +1,10 @@
 # mm-bot-manager
 
+[English](README.md) · [Русский](README.ru.md) · [Deutsch](README.de.md)
+
+Guides: [users](docs/en/user-guide.md), [operations](docs/en/operations.md),
+[development and translations](docs/en/development.md).
+
 A Mattermost bot that lets any Mattermost user manage their own bot accounts by chatting
 with it. The manager bot listens over the Mattermost WebSocket; users DM it (or @-mention
 it in a channel) to create bots, edit their attributes, and mint/revoke access tokens.
@@ -86,7 +91,7 @@ Create a `.env` file (or export variables directly) and fill it in:
 | `MM_APPROVERS`  | no       | empty                             | Comma-separated approver usernames; mandatory for imports and key attribute updates |
 | `MM_CATALOG_VIEWERS` | no | empty | Additional usernames with read-only global catalog access in DM |
 | `MM_FEEDBACK_HANDLERS` | no | empty | Comma-separated feedback handler usernames; nonempty enables `!feedback`, independently of other roles |
-| `MM_DEFAULT_LANGUAGE` | no | `en` | Fallback interface language: `en` or `ru` |
+| `MM_DEFAULT_LANGUAGE` | no | `en` | Fallback interface language: `en`, `ru` or `de` |
 | `MM_DISPLAY_TIMEZONE` | no | `UTC` | IANA timezone for dates in `!info` and feedback, e.g. `Europe/Moscow`; invalid names stop startup |
 | `MM_VERIFY_SSL` | no       | `true`                            | Set `false` for self-signed certificates                 |
 | `DB_PATH`       | no       | `/data/mm-bot-manager.sqlite3`    | SQLite fallback (lowest database precedence)             |

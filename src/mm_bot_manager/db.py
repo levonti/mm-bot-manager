@@ -8,7 +8,7 @@ from typing import Any, Literal
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS user_preference (
     user_id TEXT PRIMARY KEY,
-    language TEXT NOT NULL DEFAULT 'auto' CHECK (language IN ('auto', 'en', 'ru')),
+    language TEXT NOT NULL DEFAULT 'auto' CHECK (language IN ('auto', 'en', 'ru', 'de')),
     catalog_format TEXT NOT NULL DEFAULT 'cards' CHECK (catalog_format IN ('cards', 'table'))
 );
 
@@ -195,6 +195,7 @@ def init_schema(conn: DbConn) -> None:
     with transaction(conn):
         for stmt in _SCHEMA_STMTS:
             conn.execute(stmt)
+        _migrate_languages(conn)
         if conn.dialect == "sqlite":
             columns = {r["name"] for r in conn.execute("PRAGMA table_info(pending_bot_request)")}
         else:
@@ -407,3 +408,30 @@ def transaction(conn: DbConn) -> Iterator[DbConn]:
         with suppress(Exception):
             conn.execute("ROLLBACK")
         raise
+
+
+def _migrate_languages(conn: DbConn) -> None:
+    """Expand the preference constraint transactionally, preserving both preferences."""
+    if conn.execute("SELECT 1 FROM schema_migration WHERE version = 3").fetchone():
+        return
+    if conn.dialect == "sqlite":
+        conn.execute("ALTER TABLE user_preference RENAME TO user_preference_old")
+        conn.execute(
+            "CREATE TABLE user_preference (user_id TEXT PRIMARY KEY, "
+            "language TEXT NOT NULL DEFAULT 'auto' "
+            "CHECK (language IN ('auto', 'en', 'ru', 'de')), "
+            "catalog_format TEXT NOT NULL DEFAULT 'cards' "
+            "CHECK (catalog_format IN ('cards', 'table')))"
+        )
+        conn.execute("INSERT INTO user_preference SELECT * FROM user_preference_old")
+        conn.execute("DROP TABLE user_preference_old")
+    else:
+        conn.execute("ALTER TABLE user_preference DROP CONSTRAINT user_preference_language_check")
+        conn.execute(
+            "ALTER TABLE user_preference ADD CONSTRAINT user_preference_language_check "
+            "CHECK (language IN ('auto', 'en', 'ru', 'de'))"
+        )
+    conn.execute(
+        "INSERT INTO schema_migration (version, applied_at) VALUES (3, ?)",
+        (datetime.now(UTC).isoformat(),),
+    )

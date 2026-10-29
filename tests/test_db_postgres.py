@@ -741,3 +741,29 @@ def test_feedback_postgres_rollback_and_idempotent_replay(isolated_pg, monkeypat
     assert repo.get(ticket.number) == ticket
     assert len(repo.history(ticket.number, 0, 100)) == 1
     assert conn.execute("SELECT COUNT(*) AS n FROM feedback_outbox").fetchone()["n"] == 2
+
+
+def test_language_upgrade_preserves_preferences_on_postgres(pg_dsn):
+    from mm_bot_manager.repository import PreferenceRepo
+
+    conn = connect_postgres(pg_dsn)
+    schema = f"languages_{uuid4().hex}"
+    try:
+        conn.execute(f"CREATE SCHEMA {schema}")
+        conn.execute(f"SET search_path TO {schema}")
+        conn.execute(
+            "CREATE TABLE user_preference (user_id TEXT PRIMARY KEY, "
+            "language TEXT NOT NULL CHECK(language IN ('auto','en','ru')), "
+            "catalog_format TEXT NOT NULL DEFAULT 'cards' "
+            "CHECK(catalog_format IN ('cards','table')))"
+        )
+        conn.execute("INSERT INTO user_preference VALUES ('owner', 'ru', 'table')")
+        init_schema(conn)
+        assert PreferenceRepo(conn).get("owner") == ("ru", "table")
+        PreferenceRepo(conn).language("owner", "de")
+        init_schema(conn)
+        assert PreferenceRepo(conn).get("owner") == ("de", "table")
+    finally:
+        conn.execute("SET search_path TO public")
+        conn.execute(f"DROP SCHEMA {schema} CASCADE")
+        conn.close()

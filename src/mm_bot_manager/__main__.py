@@ -1,8 +1,8 @@
-import argparse
 import asyncio
 import contextlib
 import signal
 
+from .cli_i18n import parser_for
 from .config import Settings, load_settings
 from .db import DbConn, connect, connect_postgres, init_schema
 from .dispatcher import CommandContextFactory, MessageRouter
@@ -80,7 +80,7 @@ async def serve(settings: Settings, conn: DbConn) -> None:
             language=settings.mm_default_language,
         )
         if manager_user_id in feedback_ids:
-            raise SystemExit("MM_FEEDBACK_HANDLERS must not contain the manager bot")
+            raise SystemExit(tr(settings.mm_default_language, "startup.handler_self"))
         log.info("logged_in", user_id=manager_user_id, approver_count=len(approver_ids))
         router = MessageRouter(manager_user_id, manager_username)
         factory = CommandContextFactory(
@@ -141,8 +141,10 @@ async def serve(settings: Settings, conn: DbConn) -> None:
             await asyncio.gather(*handlers, return_exceptions=True)
 
 
-async def main_async() -> None:
+async def main_async(language: str | None = None) -> None:
     settings = load_settings()
+    if language is not None:
+        settings = settings.model_copy(update={"mm_default_language": language})
     configure_logging(settings.log_level)
     release, revision = build_info()
     get_logger("mm_bot_manager").info("starting", version=release, revision=revision)
@@ -166,11 +168,11 @@ async def main_async() -> None:
 
 
 def run() -> None:
-    parser = argparse.ArgumentParser(description="Mattermost bot manager")
+    parser, remaining = parser_for("cli.main.description")
     parser.add_argument("--version", action="version", version=version_text())
-    parser.parse_args()
+    args = parser.parse_args(remaining)
     with contextlib.suppress(KeyboardInterrupt, asyncio.CancelledError):
-        asyncio.run(main_async())
+        asyncio.run(main_async(args.language))
 
 
 if __name__ == "__main__":

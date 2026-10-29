@@ -158,7 +158,7 @@ async def test_profile_cache_is_bounded(env):
     assert len(env.language_resolver.cache) == 1024
 
 
-@pytest.mark.parametrize("command", ["!language de", "!language ru extra", "!language --unknown x"])
+@pytest.mark.parametrize("command", ["!language fr", "!language ru extra", "!language --unknown x"])
 async def test_invalid_language_does_not_change_preferences(env, command):
     assert "Usage" in await dispatch(env, command)
     assert PreferenceRepo(env.bot_repo.conn).get(ALICE) == ("auto", "cards")
@@ -191,7 +191,7 @@ async def test_language_and_format_survive_restart_without_touching_other_user(t
         conn.close()
 
 
-@pytest.mark.parametrize("language", ["ru", "en"])
+@pytest.mark.parametrize("language", ["ru", "en", "de"])
 async def test_catalog_formats_preserve_markdown_block_boundary_and_user_data(env, language):
     choose(env, language)
     seed(env, description="User supplied English description")
@@ -205,7 +205,7 @@ async def test_catalog_formats_preserve_markdown_block_boundary_and_user_data(en
     cards = await dispatch(env, "!catalog --format cards")
     assert "|---" not in cards and "**demo-0**" in cards
     assert (
-        "**Критичность**: 2 — важный" if language == "ru" else "**Criticality**: 2 — important"
+        f"**{catalog(language)['label.criticality']}**: 2 — {catalog(language)['criticality.2']}"
     ) in cards
     assert PreferenceRepo(env.bot_repo.conn).get(ALICE) == (language, "cards")
     assert "**demo-0**" in await dispatch(env, "!catalog")

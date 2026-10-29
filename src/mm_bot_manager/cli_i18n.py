@@ -12,7 +12,7 @@ from .i18n import normalize_language, tr
 class InterfaceSettings(BaseSettings):
     # Help must work before required server credentials have been configured.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
-    mm_default_language: Literal["en", "ru"] = "en"
+    mm_default_language: Literal["en", "ru", "de"] = "en"
 
 
 class LocalHelpFormatter(argparse.HelpFormatter):
@@ -61,11 +61,14 @@ def parser_for(description_key: str) -> tuple[LocalParser, list[str]]:
         LocalParser(language=language).error("")
         raise AssertionError("unreachable") from None
     if choice.language is not None:
-        if choice.language not in {"ru", "en"}:
+        if choice.language not in {"ru", "en", "de"}:
             LocalParser(language=language).exit(2, tr(language, "cli.unsupported_language") + "\n")
         language = choice.language
     parser = LocalParser(language=language, description=tr(language, description_key))
     parser.add_argument(
-        "--language", choices=["ru", "en"], default=language, help=tr(language, "cli.language")
+        "--language",
+        choices=["ru", "en", "de"],
+        default=language,
+        help=tr(language, "cli.language"),
     )
     return parser, remaining
