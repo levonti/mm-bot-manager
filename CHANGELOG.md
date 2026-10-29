@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- German chat and CLI interfaces, three-language guides and translation CI gates.
+
+### Upgrade notes
+
+- Migration 3 expands language preferences on SQLite and PostgreSQL without losing data.
+  Stop the manager and back up first. Before running an older image, change every
+  `de` preference to `auto`; retain migration 3 and the expanded database constraint.
+
 ## [0.3.1] - 2026-10-26
 
 ### Security

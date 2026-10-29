@@ -1,5 +1,7 @@
 # Versioning and releases
 
+[English](en/development.md) · [Русский](ru/development.md) · [Deutsch](de/development.md)
+
 ## Version policy
 
 `pyproject.toml` is the application version source. The project's own entry in

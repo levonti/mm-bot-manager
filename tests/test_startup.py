@@ -210,7 +210,7 @@ async def test_startup_automatically_upgrades_previous_release_before_events(tmp
     async def stream(*args, **kwargs):
         assert [
             row[0] for row in conn.execute("SELECT version FROM schema_migration ORDER BY version")
-        ] == [1, 2]
+        ] == [1, 2, 3]
         assert BotRepo(conn).get(BOT).revision == 0
         assert PendingRequestRepo(conn).get("old-pending").status == "pending"
         assert TokenRepo(conn).get("keep-token").revoked_at is None

@@ -425,6 +425,6 @@ def test_feedback_migration_failure_rolls_back_and_can_retry(tmp_path, monkeypat
         assert [
             row["version"]
             for row in conn.execute("SELECT version FROM schema_migration ORDER BY version")
-        ] == [1, 2]
+        ] == [1, 2, 3]
     finally:
         conn.close()

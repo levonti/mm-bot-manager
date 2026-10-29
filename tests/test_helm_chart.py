@@ -398,10 +398,13 @@ def test_catalog_viewer_setting_is_passed_from_values_to_application() -> None:
     assert env["MM_CATALOG_VIEWERS"]["valueFrom"]["configMapKeyRef"]["key"] == "MM_CATALOG_VIEWERS"
 
 
-def test_default_language_setting_reaches_container_and_rejects_unknown_locale() -> None:
-    resources = render("values-external.yaml", "--set-string", "mattermost.defaultLanguage=ru")
+@pytest.mark.parametrize("language", ["en", "ru", "de"])
+def test_default_language_setting_reaches_container_and_rejects_unknown_locale(language) -> None:
+    resources = render(
+        "values-external.yaml", "--set-string", f"mattermost.defaultLanguage={language}"
+    )
     config = by_kind(resources, "ConfigMap")[0]
-    assert config["data"]["MM_DEFAULT_LANGUAGE"] == "ru"
+    assert config["data"]["MM_DEFAULT_LANGUAGE"] == language
     deployment = by_kind(resources, "Deployment")[0]
     env = {
         item["name"]: item

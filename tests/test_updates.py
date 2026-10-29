@@ -410,7 +410,7 @@ async def test_recovery_rejects_self_or_removed_approver(env, reviewer):
     env.mm.assert_no_bot_mutations()
 
 
-@pytest.mark.parametrize("language", ["en", "ru"])
+@pytest.mark.parametrize("language", ["en", "ru", "de"])
 @pytest.mark.parametrize("role", ["user", "catalog", "approver"])
 @pytest.mark.parametrize("channel", ["D", "O", "P", "G", None])
 async def test_help_visibility_matches_role_and_channel(env, language, role, channel):
@@ -576,7 +576,7 @@ def assert_upgrade_preserves_data(conn):
     assert [
         row["version"]
         for row in conn.execute("SELECT version FROM schema_migration ORDER BY version")
-    ] == [1, 2]
+    ] == [1, 2, 3]
     ctx = import_context(conn, UpdateMM())
     assert ctx.bot_repo.get(BOT).revision == 0
     return ctx

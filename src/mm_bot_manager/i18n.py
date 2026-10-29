@@ -7,7 +7,7 @@ from importlib.resources import files
 from string import Formatter
 from typing import Any
 
-SUPPORTED_LANGUAGES = frozenset({"en", "ru"})
+SUPPORTED_LANGUAGES = frozenset({"en", "ru", "de"})
 
 
 @cache
