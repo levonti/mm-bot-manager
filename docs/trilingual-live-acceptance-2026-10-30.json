@@ -1,0 +1,200 @@
+{
+  "date": "2026-10-30T06:11:01.460904+00:00",
+  "source_commit": "f40c469b9280aa9f02d028a4b3539cf7b0aabdd7",
+  "image": "mattermost/mattermost-team-edition:10.11.24@sha256:956002f81635864b873239ee83042a803167f0fb452348fbea72b2142d7c89fc",
+  "environment": "disposable localhost Mattermost with dedicated human accounts",
+  "checks": [
+    {
+      "name": "en: profile auto detection and role help over WebSocket",
+      "result": "PASS"
+    },
+    {
+      "name": "en: manual en and immediate help",
+      "result": "PASS"
+    },
+    {
+      "name": "en: manual ru and immediate help",
+      "result": "PASS"
+    },
+    {
+      "name": "en: manual de and immediate help",
+      "result": "PASS"
+    },
+    {
+      "name": "en: auto restores server profile",
+      "result": "PASS"
+    },
+    {
+      "name": "en: invalid language, unknown command, parser and validation errors",
+      "result": "PASS"
+    },
+    {
+      "name": "ru: profile auto detection and role help over WebSocket",
+      "result": "PASS"
+    },
+    {
+      "name": "ru: manual en and immediate help",
+      "result": "PASS"
+    },
+    {
+      "name": "ru: manual ru and immediate help",
+      "result": "PASS"
+    },
+    {
+      "name": "ru: manual de and immediate help",
+      "result": "PASS"
+    },
+    {
+      "name": "ru: auto restores server profile",
+      "result": "PASS"
+    },
+    {
+      "name": "ru: invalid language, unknown command, parser and validation errors",
+      "result": "PASS"
+    },
+    {
+      "name": "de: profile auto detection and role help over WebSocket",
+      "result": "PASS"
+    },
+    {
+      "name": "de: manual en and immediate help",
+      "result": "PASS"
+    },
+    {
+      "name": "de: manual ru and immediate help",
+      "result": "PASS"
+    },
+    {
+      "name": "de: manual de and immediate help",
+      "result": "PASS"
+    },
+    {
+      "name": "de: auto restores server profile",
+      "result": "PASS"
+    },
+    {
+      "name": "de: invalid language, unknown command, parser and validation errors",
+      "result": "PASS"
+    },
+    {
+      "name": "concurrent EN/RU/DE help remains isolated per user",
+      "result": "PASS"
+    },
+    {
+      "name": "en: real HTTP 404 is localized with safe diagnostic",
+      "result": "PASS"
+    },
+    {
+      "name": "ru: real HTTP 404 is localized with safe diagnostic",
+      "result": "PASS"
+    },
+    {
+      "name": "de: real HTTP 404 is localized with safe diagnostic",
+      "result": "PASS"
+    },
+    {
+      "name": "unsupported profile falls back to EN; explicit DE overrides profile",
+      "result": "PASS"
+    },
+    {
+      "name": "en->en: approval request notification",
+      "result": "PASS"
+    },
+    {
+      "name": "en->ru: approval request notification",
+      "result": "PASS"
+    },
+    {
+      "name": "en->de: approval request notification",
+      "result": "PASS"
+    },
+    {
+      "name": "ru->en: denial notification preserves reason",
+      "result": "PASS"
+    },
+    {
+      "name": "ru->en: approval request notification",
+      "result": "PASS"
+    },
+    {
+      "name": "ru->ru: approval request notification",
+      "result": "PASS"
+    },
+    {
+      "name": "ru->de: approval request notification",
+      "result": "PASS"
+    },
+    {
+      "name": "de->ru: denial notification preserves reason",
+      "result": "PASS"
+    },
+    {
+      "name": "de->en: approval request notification",
+      "result": "PASS"
+    },
+    {
+      "name": "de->ru: approval request notification",
+      "result": "PASS"
+    },
+    {
+      "name": "de->de: approval request notification",
+      "result": "PASS"
+    },
+    {
+      "name": "en->de: denial notification preserves reason",
+      "result": "PASS"
+    },
+    {
+      "name": "en->ru: durable feedback notification",
+      "result": "PASS"
+    },
+    {
+      "name": "en->de: durable feedback notification",
+      "result": "PASS"
+    },
+    {
+      "name": "ru->en: assignment notification and timezone",
+      "result": "PASS"
+    },
+    {
+      "name": "ru->en: durable feedback notification",
+      "result": "PASS"
+    },
+    {
+      "name": "ru->de: durable feedback notification",
+      "result": "PASS"
+    },
+    {
+      "name": "de->ru: assignment notification and timezone",
+      "result": "PASS"
+    },
+    {
+      "name": "de->en: durable feedback notification",
+      "result": "PASS"
+    },
+    {
+      "name": "de->ru: durable feedback notification",
+      "result": "PASS"
+    },
+    {
+      "name": "en->de: assignment notification and timezone",
+      "result": "PASS"
+    },
+    {
+      "name": "en: preference and help survive full manager restart",
+      "result": "PASS"
+    },
+    {
+      "name": "ru: preference and help survive full manager restart",
+      "result": "PASS"
+    },
+    {
+      "name": "de: preference and help survive full manager restart",
+      "result": "PASS"
+    }
+  ],
+  "result": "PASS",
+  "cleanup": true,
+  "stage": "de: !help",
+  "server_version": "not exposed"
+}
