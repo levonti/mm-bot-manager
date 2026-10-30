@@ -25,3 +25,5 @@ helm lint deploy/helm/mm-bot-manager
 ```sh
 uv run --no-sync python scripts/check_translations.py --refresh
 ```
+
+Необязательная live-проверка: `uv run --no-sync python scripts/check_live_languages.py --output /private/tmp/mm-language-report.json`. Нужен Docker; создаётся отдельный локальный Mattermost с тремя настоящими пользователями. После проверки удаляются его контейнеры, тома и сеть. `.env` не загружается. Закреплённый amd64-образ может потребовать скачивания и эмуляции. Область проверки и ограничения описаны в [отчёте](../trilingual-live-acceptance-2026-10-30.md).

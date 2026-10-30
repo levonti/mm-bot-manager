@@ -25,3 +25,5 @@ helm lint deploy/helm/mm-bot-manager
 ```sh
 uv run --no-sync python scripts/check_translations.py --refresh
 ```
+
+Optionaler Live-Test: `uv run --no-sync python scripts/check_live_languages.py --output /private/tmp/mm-language-report.json`. Benötigt Docker; erstellt einen isolierten lokalen Mattermost mit drei echten Benutzern. Container, Volumes und Netzwerk werden danach entfernt. `.env` wird nie geladen. Das festgelegte amd64-Image kann Download und Emulation erfordern. Umfang und Grenzen stehen im [Prüfbericht](../trilingual-live-acceptance-2026-10-30.md).

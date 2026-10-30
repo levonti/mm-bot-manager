@@ -68,8 +68,8 @@ verify:
         git -c http.sslCAInfo="${CI_SERVER_TLS_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}" fetch origin "$CI_DEFAULT_BRANCH"
         git merge-base --is-ancestor "$CI_COMMIT_SHA" FETCH_HEAD
       fi
-    - uv run --no-sync ruff check src tests scripts/check_translations.py scripts/release.py scripts/check_runtime_security.py
-    - uv run --no-sync ruff format --check src tests scripts/check_translations.py scripts/release.py scripts/check_runtime_security.py
+    - uv run --no-sync ruff check src tests scripts/check_live_languages.py scripts/check_translations.py scripts/release.py scripts/check_runtime_security.py
+    - uv run --no-sync ruff format --check src tests scripts/check_live_languages.py scripts/check_translations.py scripts/release.py scripts/check_runtime_security.py
     - uv run --no-sync mypy src scripts/check_runtime_security.py
     - helm lint deploy/helm/mm-bot-manager
     - uv run --no-sync pytest -q --cov=mm_bot_manager --cov-branch --cov-fail-under=85 --cov-report=term-missing --cov-report=xml:coverage.xml --junitxml=report.xml
