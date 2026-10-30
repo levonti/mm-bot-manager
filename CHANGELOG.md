@@ -2,15 +2,45 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-30
+
 ### Added
 
-- German chat and CLI interfaces, three-language guides and translation CI gates.
+- Complete German chat and administrative CLI interfaces alongside English and
+  Russian, with 284 messages in each catalog. Select `!language en|ru|de|auto`,
+  CLI `--language en|ru|de`, or configure `MM_DEFAULT_LANGUAGE` and Helm
+  `mattermost.defaultLanguage`. Automatic selection follows the Mattermost profile;
+  explicit choices take precedence and persist across restarts.
+- Recipient-specific EN/RU/DE approval, denial and feedback notifications, German
+  date formatting, and message-size validation across all supported languages.
+  Command names, flags, identifiers, JSON keys and user-authored text stay unchanged.
+- Three-language entry points and user, operations and development guides, a shared
+  terminology glossary, and CI checks for catalog parity, placeholders, command
+  spelling, documentation links and reviewed translation fingerprints.
+- Opt-in isolated Mattermost acceptance driver with a pinned server image and
+  sanitized evidence: 47 live checks passed with three real test users, including
+  concurrent requests, errors, notifications, fallback and full manager restart.
+  See [the acceptance report](docs/trilingual-live-acceptance-2026-10-30.md) for
+  environment and limits; the working deployment was not modified.
 
 ### Upgrade notes
 
-- Migration 3 expands language preferences on SQLite and PostgreSQL without losing data.
-  Stop the manager and back up first. Before running an older image, change every
-  `de` preference to `auto`; retain migration 3 and the expanded database constraint.
+- Application and Helm chart versions advance to 0.4.0; Helm `appVersion` and the
+  Python package/lockfile version agree. Dependency versions are unchanged.
+- Startup migration 3 expands the language preference constraint on SQLite and
+  PostgreSQL while preserving existing preferences and catalog formats. Stop the
+  old manager, take and verify a database backup, then start the new version.
+  Run only one manager against a database. Existing EN/RU choices and `auto`
+  remain valid; the default language remains English.
+- Before returning to an older application image, stop the manager and run
+  `UPDATE user_preference SET language = 'auto' WHERE language = 'de';` against
+  the same database. Retain migration 3 and the expanded constraint: application
+  rollback does not reverse the schema migration. Restoring an older backup
+  discards subsequent writes and is a separate recovery operation.
+- Detailed platform references and historical reports retain their original
+  language. German copy has not received independent native-speaker review.
+  Browser/client rendering and rollout of the release image are not established
+  by the API/WebSocket acceptance test.
 
 ## [0.3.1] - 2026-10-26
 
